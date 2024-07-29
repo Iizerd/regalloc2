@@ -546,7 +546,7 @@ pub struct SpillSlotData {
     pub alloc: Allocation,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SpillSlotList {
     pub slots: SmallVec<[SpillSlotIndex; 32]>,
     pub probe_start: usize,
@@ -572,7 +572,7 @@ impl SpillSlotList {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PrioQueue {
     pub heap: alloc::collections::BinaryHeap<PrioQueueEntry>,
 }

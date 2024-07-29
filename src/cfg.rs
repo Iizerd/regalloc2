@@ -10,7 +10,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use smallvec::{smallvec, SmallVec};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CFGInfo {
     /// Postorder traversal of blocks.
     pub postorder: Vec<Block>,

@@ -3,12 +3,17 @@ macro_rules! define_index {
     ($ix:ident, $storage:ident, $elem:ident) => {
         define_index!($ix);
 
-        #[derive(Clone, Debug)]
+        #[derive(Clone, Debug, Default)]
         pub struct $storage {
             storage: Vec<$elem>,
         }
 
         impl $storage {
+            #[inline(always)]
+            pub fn clear(&mut self) {
+                self.storage.clear();
+            }
+
             #[inline(always)]
             pub fn with_capacity(n: usize) -> Self {
                 Self {

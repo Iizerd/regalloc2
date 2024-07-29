@@ -35,6 +35,7 @@ macro_rules! trace_enabled {
 }
 
 use core::hash::BuildHasherDefault;
+use ion::data_structures::Env;
 use rustc_hash::FxHasher;
 type FxHashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 type FxHashSet<V> = hashbrown::HashSet<V, BuildHasherDefault<FxHasher>>;
@@ -42,7 +43,7 @@ type FxHashSet<V> = hashbrown::HashSet<V, BuildHasherDefault<FxHasher>>;
 pub(crate) mod cfg;
 pub(crate) mod domtree;
 pub mod indexset;
-pub(crate) mod ion;
+pub mod ion;
 pub(crate) mod moves;
 pub(crate) mod postorder;
 pub mod ssa;
@@ -1445,7 +1446,7 @@ pub struct MachineEnv {
 }
 
 /// The output of the register allocator.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct Output {
     /// How many spillslots are needed in the frame?
@@ -1562,6 +1563,15 @@ pub fn run<F: Function>(
     options: &RegallocOptions,
 ) -> Result<Output, RegAllocError> {
     ion::run(func, env, options.verbose_log, options.validate_ssa)
+}
+
+/// Run the allocator.
+pub fn run_into<F: Function>(
+    options: &RegallocOptions,
+    output: &mut Output,
+    regalloc_env: &mut Env<F>,
+) -> Result<(), RegAllocError> {
+    ion::run_into(options.verbose_log, options.validate_ssa, output, regalloc_env)
 }
 
 /// Options for allocation.
