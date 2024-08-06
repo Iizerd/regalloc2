@@ -108,10 +108,17 @@ impl<'a, F: Function> Env<'a, F> {
         self.safepoints_per_vreg.clear();
         self.spilled_bundles.clear();
         self.spillslots.clear();
-        self.slots_by_class.iter_mut().for_each(|s| {s.slots.clear(); s.probe_start = 0});
+        self.slots_by_class.iter_mut().for_each(|s| {
+            s.slots.clear();
+            s.probe_start = 0
+        });
         self.allocated_bundle_count = 0;
-        self.extra_spillslots_by_class.iter_mut().for_each(|s| s.clear());
-        self.preferred_victim_by_class.iter_mut().for_each(|v| *v = PReg::invalid());
+        self.extra_spillslots_by_class
+            .iter_mut()
+            .for_each(|s| s.clear());
+        self.preferred_victim_by_class
+            .iter_mut()
+            .for_each(|v| *v = PReg::invalid());
         self.multi_fixed_reg_fixups.clear();
         self.allocs.clear();
         self.inst_alloc_offsets.clear();
@@ -184,8 +191,7 @@ pub fn run_into<F: Function>(
     enable_ssa_checker: bool,
     output: &mut Output,
     env: &mut Env<F>,
-) -> Result<(), RegAllocError>
-{
+) -> Result<(), RegAllocError> {
     let cfginfo = CFGInfo::new(env.func)?;
 
     if enable_ssa_checker {
