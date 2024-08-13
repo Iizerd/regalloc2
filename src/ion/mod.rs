@@ -134,8 +134,13 @@ impl<'a, F: Function> Env<'a, F> {
     ///
     /// Creates PRegs and VRegs and computes liveins and liveouts. These are
     /// used for scheduling.
-    pub fn init_pre_scheduling(&mut self, func: &F) -> Result<(), RegAllocError> {
+    pub fn init_pre_scheduling(
+        &mut self,
+        func: &F,
+        machine_env: &MachineEnv,
+    ) -> Result<(), RegAllocError> {
         self.clear();
+        self.env = unsafe { std::mem::transmute(&machine_env) };
         self.cfginfo = CFGInfo::new(func)?;
         self.create_pregs_and_vregs();
         self.compute_liveness()
