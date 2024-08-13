@@ -339,6 +339,18 @@ impl VReg {
     }
 
     #[inline(always)]
+    pub const fn vreg_raw(self) -> u32 {
+        self.bits >> 2
+    }
+
+    #[inline(always)]
+    pub fn set_vreg_raw(&mut self, virt_reg: u32) {
+        // Mask off old vreg.
+        self.bits &= 0b11;
+        self.bits |= virt_reg << 2;
+    }
+
+    #[inline(always)]
     pub const fn class(self) -> RegClass {
         match self.bits & 0b11 {
             0 => RegClass::Int,
@@ -779,7 +791,7 @@ impl Operand {
         VReg::new(vreg_idx, self.class())
     }
 
-    /// Get the raw 32bit encoding of the [`VReg`] associated with this 
+    /// Get the raw 32bit encoding of the [`VReg`] associated with this
     /// Operand
     #[inline(always)]
     pub fn vreg_raw(self) -> u32 {
@@ -1571,7 +1583,12 @@ pub fn run_into<F: Function>(
     output: &mut Output,
     regalloc_env: &mut Env<F>,
 ) -> Result<(), RegAllocError> {
-    ion::run_into(options.verbose_log, options.validate_ssa, output, regalloc_env)
+    ion::run_into(
+        options.verbose_log,
+        options.validate_ssa,
+        output,
+        regalloc_env,
+    )
 }
 
 /// Options for allocation.
