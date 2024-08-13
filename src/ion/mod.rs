@@ -140,8 +140,8 @@ impl<'a, F: Function> Env<'a, F> {
         machine_env: &MachineEnv,
     ) -> Result<(), RegAllocError> {
         self.clear();
-        self.func = unsafe { std::mem::transmute(&func) };
-        self.env = unsafe { std::mem::transmute(&machine_env) };
+        self.func = unsafe { std::mem::transmute(func) };
+        self.env = unsafe { std::mem::transmute(machine_env) };
         self.cfginfo = CFGInfo::new(func)?;
         self.create_pregs_and_vregs();
         self.compute_liveness()
