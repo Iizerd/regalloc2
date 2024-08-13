@@ -130,6 +130,29 @@ impl<'a, F: Function> Env<'a, F> {
         self.conflict_set.clear();
     }
 
+    /// Clears the environment entirely.
+    ///
+    /// Creates PRegs and VRegs and computes liveins and liveouts. These are
+    /// used for scheduling.
+    pub fn init_pre_scheduling(&mut self, func: &F) -> Result<(), RegAllocError> {
+        self.clear();
+        self.cfginfo = CFGInfo::new(func)?;
+        self.create_pregs_and_vregs();
+        self.compute_liveness()
+    }
+
+    /// THis one doesn't create PRegs or compute liveness.
+    pub(crate) fn init_post_scheduling(&mut self) -> Result<(), RegAllocError> {
+        self.build_liveranges();
+        self.fixup_multi_fixed_vregs();
+        self.merge_vreg_bundles();
+        self.queue_bundles();
+        if trace_enabled!() {
+            self.dump_state();
+        }
+        Ok(())
+    }
+
     pub(crate) fn init(&mut self) -> Result<(), RegAllocError> {
         self.create_pregs_and_vregs();
         self.compute_liveness()?;
@@ -192,17 +215,19 @@ pub fn run_into<F: Function>(
     output: &mut Output,
     env: &mut Env<F>,
 ) -> Result<(), RegAllocError> {
-    let cfginfo = CFGInfo::new(env.func)?;
+    // Created in the pre scheduling init now.
+    // let cfginfo = CFGInfo::new(env.func)?;
 
     if enable_ssa_checker {
-        validate_ssa(env.func, &cfginfo)?;
+        validate_ssa(env.func, &env.cfginfo)?;
     }
 
-    env.clear();
-    env.cfginfo = cfginfo;
+    // Created in the pre scheduling init now.
+    // env.clear();
+    // env.cfginfo = cfginfo;
     env.annotations_enabled = enable_annotations;
 
-    env.init()?;
+    env.init_post_scheduling()?;
 
     let edits = env.run()?;
 
