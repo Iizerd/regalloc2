@@ -137,6 +137,7 @@ impl Function for Func {
             RegClass::Int => 1,
             RegClass::Float => 1,
             RegClass::Vector => 2,
+            RegClass::StackCopy => 1,
         }
     }
 }

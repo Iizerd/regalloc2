@@ -861,6 +861,7 @@ impl<'a, F: Function> Env<'a, F> {
             let mut int_moves: SmallVec<[InsertedMove; 8]> = smallvec![];
             let mut float_moves: SmallVec<[InsertedMove; 8]> = smallvec![];
             let mut vec_moves: SmallVec<[InsertedMove; 8]> = smallvec![];
+            let mut stack_copy_moves: SmallVec<[InsertedMove; 8]> = smallvec![];
 
             for m in moves {
                 match m.to_vreg.class() {
@@ -873,6 +874,9 @@ impl<'a, F: Function> Env<'a, F> {
                     RegClass::Vector => {
                         vec_moves.push(m.clone());
                     }
+                    RegClass::StackCopy => {
+                        stack_copy_moves.push(m.clone());
+                    }
                 }
             }
 
@@ -880,6 +884,7 @@ impl<'a, F: Function> Env<'a, F> {
                 (RegClass::Int, &int_moves),
                 (RegClass::Float, &float_moves),
                 (RegClass::Vector, &vec_moves),
+                (RegClass::StackCopy, &stack_copy_moves),
             ] {
                 // All moves in `moves` semantically happen in
                 // parallel. Let's resolve these to a sequence of moves

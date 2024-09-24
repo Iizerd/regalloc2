@@ -84,6 +84,7 @@ pub enum RegClass {
     Int = 0,
     Float = 1,
     Vector = 2,
+    StackCopy = 3,
 }
 
 /// A physical register. Contains a physical register number and a class.
@@ -133,6 +134,7 @@ impl PReg {
             0 => RegClass::Int,
             1 => RegClass::Float,
             2 => RegClass::Vector,
+            3 => RegClass::StackCopy,
             _ => unreachable!(),
         }
     }
@@ -179,6 +181,7 @@ impl core::fmt::Display for PReg {
             RegClass::Int => "i",
             RegClass::Float => "f",
             RegClass::Vector => "v",
+            RegClass::StackCopy => "sc",
         };
         write!(f, "p{}{}", self.hw_enc(), class)
     }
@@ -356,6 +359,7 @@ impl VReg {
             0 => RegClass::Int,
             1 => RegClass::Float,
             2 => RegClass::Vector,
+            3 => RegClass::StackCopy,
             _ => unreachable!(),
         }
     }
@@ -813,6 +817,7 @@ impl Operand {
             0 => RegClass::Int,
             1 => RegClass::Float,
             2 => RegClass::Vector,
+            3 => RegClass::StackCopy,
             _ => unreachable!(),
         }
     }
@@ -915,6 +920,7 @@ impl core::fmt::Display for Operand {
                 RegClass::Int => "i",
                 RegClass::Float => "f",
                 RegClass::Vector => "v",
+                RegClass::StackCopy => "sc",
             },
             self.constraint()
         )
@@ -1420,7 +1426,7 @@ pub struct MachineEnv {
     ///
     /// If an explicit scratch register is provided in `scratch_by_class` then
     /// it must not appear in this list.
-    pub preferred_regs_by_class: [Vec<PReg>; 3],
+    pub preferred_regs_by_class: [Vec<PReg>; 4],
 
     /// Non-preferred physical registers for each class. These are the
     /// registers that will be allocated if a preferred register is
@@ -1429,7 +1435,7 @@ pub struct MachineEnv {
     ///
     /// If an explicit scratch register is provided in `scratch_by_class` then
     /// it must not appear in this list.
-    pub non_preferred_regs_by_class: [Vec<PReg>; 3],
+    pub non_preferred_regs_by_class: [Vec<PReg>; 4],
 
     /// Optional dedicated scratch register per class. This is needed to perform
     /// moves between registers when cyclic move patterns occur. The
@@ -1446,7 +1452,7 @@ pub struct MachineEnv {
     /// If a scratch register is not provided then the register allocator will
     /// automatically allocate one as needed, spilling a value to the stack if
     /// necessary.
-    pub scratch_by_class: [Option<PReg>; 3],
+    pub scratch_by_class: [Option<PReg>; 4],
 
     /// Some `PReg`s can be designated as locations on the stack rather than
     /// actual registers. These can be used to tell the register allocator about

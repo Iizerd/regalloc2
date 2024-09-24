@@ -119,6 +119,7 @@ impl SerializableFunction {
                 func.spillslot_size(RegClass::Int),
                 func.spillslot_size(RegClass::Float),
                 func.spillslot_size(RegClass::Vector),
+                func.spillslot_size(RegClass::StackCopy),
             ]
             .to_vec(),
             multi_spillslot_named_by_last_slot: func.multi_spillslot_named_by_last_slot(),
@@ -228,6 +229,11 @@ impl fmt::Debug for SerializableFunction {
             f,
             "  spillslot_size(Vector): {}\n",
             self.spillslot_size(RegClass::Vector)
+        )?;
+        write!(
+            f,
+            "  spillslot_size(StackCopy): {}\n",
+            self.spillslot_size(RegClass::StackCopy)
         )?;
         write!(
             f,
