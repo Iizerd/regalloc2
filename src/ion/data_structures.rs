@@ -465,10 +465,10 @@ pub struct Env<'a, F: Function> {
 
     pub spilled_bundles: Vec<LiveBundleIndex>,
     pub spillslots: Vec<SpillSlotData>,
-    pub slots_by_class: [SpillSlotList; 3],
+    pub slots_by_class: [SpillSlotList; 4],
 
-    pub extra_spillslots_by_class: [SmallVec<[Allocation; 2]>; 3],
-    pub preferred_victim_by_class: [PReg; 3],
+    pub extra_spillslots_by_class: [SmallVec<[Allocation; 2]>; 4],
+    pub preferred_victim_by_class: [PReg; 4],
 
     // When multiple fixed-register constraints are present on a
     // single VReg at a single program point (this can happen for,
