@@ -37,6 +37,7 @@ macro_rules! trace_enabled {
 
 use alloc::rc::Rc;
 use allocator_api2::vec::Vec as Vec2;
+use core::fmt::Display;
 use core::ops::Deref as _;
 use core::{hash::BuildHasherDefault, iter::FromIterator};
 use rustc_hash::FxHasher;
@@ -97,8 +98,8 @@ pub enum RegClass {
 }
 impl RegClass {
     pub const BITS: usize = 3;
-    pub const BITS_MASK: u64 = 0b111;
-    pub const MAX: usize = 7;
+    pub const BITS_MASK: u8 = 0b111;
+    pub const MAX: usize = 8;
     pub fn index(&self) -> usize {
         *self as usize
     }
@@ -114,6 +115,20 @@ impl RegClass {
             7 => RegClass::RegClass8,
             _ => unreachable!(),
         }
+    }
+}
+impl Display for RegClass {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", match self {
+            RegClass::Int => "i",
+            RegClass::Float => "f",
+            RegClass::Vector => "v",
+            RegClass::StackCopy => "sc",
+            RegClass::RegClass5 => "rc5",
+            RegClass::RegClass6 => "rc6",
+            RegClass::RegClass7 => "rc7",
+            RegClass::RegClass8 => "rc8",
+        })
     }
 }
 
@@ -134,20 +149,22 @@ impl RegClass {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct PReg {
-    bits: u8,
+    bits: u16,
 }
 
 impl PReg {
     pub const MAX_BITS: usize = 6;
     pub const MAX: usize = (1 << Self::MAX_BITS) - 1;
-    pub const NUM_INDEX: usize = 1 << (Self::MAX_BITS + 2); // including RegClass bits
+    pub const NUM_INDEX: usize = 1 << (Self::MAX_BITS + RegClass::BITS); // including RegClass bits
+
+    pub const USED_BITS_MASK: u16 = 0b1_1111_1111;
 
     /// Create a new PReg. The `hw_enc` range is 6 bits.
     #[inline(always)]
     pub const fn new(hw_enc: usize, class: RegClass) -> Self {
         debug_assert!(hw_enc <= PReg::MAX);
         PReg {
-            bits: ((class as u8) << Self::MAX_BITS) | (hw_enc as u8),
+            bits: ((class as u16) << Self::MAX_BITS) | (hw_enc as u16),
         }
     }
 
@@ -160,11 +177,15 @@ impl PReg {
     /// The register class.
     #[inline(always)]
     pub const fn class(self) -> RegClass {
-        match (self.bits >> Self::MAX_BITS) & 0b11 {
+        match (self.bits >> Self::MAX_BITS) as u8 & RegClass::BITS_MASK {
             0 => RegClass::Int,
             1 => RegClass::Float,
             2 => RegClass::Vector,
             3 => RegClass::StackCopy,
+            4 => RegClass::RegClass5,
+            5 => RegClass::RegClass6,
+            6 => RegClass::RegClass7,
+            7 => RegClass::RegClass8,
             _ => unreachable!(),
         }
     }
@@ -181,7 +202,7 @@ impl PReg {
     #[inline(always)]
     pub const fn from_index(index: usize) -> Self {
         PReg {
-            bits: (index & (Self::NUM_INDEX - 1)) as u8,
+            bits: (index & (Self::NUM_INDEX - 1)) as u16 & Self::USED_BITS_MASK,
         }
     }
 
@@ -203,7 +224,7 @@ impl core::fmt::Debug for PReg {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(
             f,
-            "PReg(hw = {}, class = {:?}, index = {})",
+            "PReg(hw = {}, class = {}, index = {})",
             self.hw_enc(),
             self.class(),
             self.index()
@@ -213,13 +234,7 @@ impl core::fmt::Debug for PReg {
 
 impl core::fmt::Display for PReg {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        let class = match self.class() {
-            RegClass::Int => "i",
-            RegClass::Float => "f",
-            RegClass::Vector => "v",
-            RegClass::StackCopy => "sc",
-        };
-        write!(f, "p{}{}", self.hw_enc(), class)
+        write!(f, "p{}{}", self.hw_enc(), self.class())
     }
 }
 
@@ -418,42 +433,46 @@ pub struct VReg {
 }
 
 impl VReg {
-    pub const MAX_BITS: usize = 21;
+    pub const MAX_BITS: usize = 20;
     pub const MAX: usize = (1 << Self::MAX_BITS) - 1;
 
     #[inline(always)]
     pub const fn new(virt_reg: usize, class: RegClass) -> Self {
         debug_assert!(virt_reg <= VReg::MAX);
         VReg {
-            bits: ((virt_reg as u32) << 2) | (class as u8 as u32),
+            bits: ((virt_reg as u32) << RegClass::BITS) | (class as u8 as u32),
         }
     }
 
     #[inline(always)]
     pub const fn vreg(self) -> usize {
-        let vreg = (self.bits >> 2) as usize;
+        let vreg = (self.bits >> RegClass::BITS) as usize;
         vreg
     }
 
     #[inline(always)]
     pub const fn vreg_raw(self) -> u32 {
-        self.bits >> 2
+        self.bits >> RegClass::BITS
     }
 
     #[inline(always)]
     pub fn set_vreg_raw(&mut self, virt_reg: u32) {
         // Mask off old vreg.
-        self.bits &= 0b11;
-        self.bits |= virt_reg << 2;
+        self.bits &= RegClass::BITS_MASK as u32;
+        self.bits |= virt_reg << RegClass::BITS;
     }
 
     #[inline(always)]
     pub const fn class(self) -> RegClass {
-        match self.bits & 0b11 {
+        match self.bits & RegClass::BITS_MASK as u32 {
             0 => RegClass::Int,
             1 => RegClass::Float,
             2 => RegClass::Vector,
             3 => RegClass::StackCopy,
+            4 => RegClass::RegClass5,
+            5 => RegClass::RegClass6,
+            6 => RegClass::RegClass7,
+            7 => RegClass::RegClass8,
             _ => unreachable!(),
         }
     }
@@ -647,7 +666,7 @@ pub enum OperandPos {
 pub struct Operand {
     /// Bit-pack into 32 bits.
     ///
-    /// constraint:7 kind:1 pos:1 class:2 vreg:21
+    /// constraint:7 kind:1 pos:1 class:3 vreg:20
     ///
     /// where `constraint` is an `OperandConstraint`, `kind` is an
     /// `OperandKind`, `pos` is an `OperandPos`, `class` is a
@@ -689,7 +708,7 @@ impl Operand {
         let kind_field = kind as u8 as u32;
         Operand {
             bits: vreg.vreg() as u32
-                | (class_field << 21)
+                | (class_field << 20)
                 | (pos_field << 23)
                 | (kind_field << 24)
                 | (constraint_field << 25),
@@ -1021,6 +1040,10 @@ impl core::fmt::Display for Operand {
                 RegClass::Float => "f",
                 RegClass::Vector => "v",
                 RegClass::StackCopy => "sc",
+                RegClass::RegClass5 => "rc5",
+                RegClass::RegClass6 => "rc6",
+                RegClass::RegClass7 => "rc7",
+                RegClass::RegClass8 => "rc8",
             },
             self.constraint()
         )
@@ -1499,7 +1522,7 @@ pub struct MachineEnv {
     ///
     /// If an explicit scratch register is provided in `scratch_by_class` then
     /// it must not appear in this list.
-    pub preferred_regs_by_class: [Vec<PReg>; 4],
+    pub preferred_regs_by_class: [Vec<PReg>; RegClass::MAX],
 
     /// Non-preferred physical registers for each class. These are the
     /// registers that will be allocated if a preferred register is
@@ -1508,7 +1531,7 @@ pub struct MachineEnv {
     ///
     /// If an explicit scratch register is provided in `scratch_by_class` then
     /// it must not appear in this list.
-    pub non_preferred_regs_by_class: [Vec<PReg>; 4],
+    pub non_preferred_regs_by_class: [Vec<PReg>; RegClass::MAX],
 
     /// Optional dedicated scratch register per class. This is needed to perform
     /// moves between registers when cyclic move patterns occur. The
@@ -1525,7 +1548,7 @@ pub struct MachineEnv {
     /// If a scratch register is not provided then the register allocator will
     /// automatically allocate one as needed, spilling a value to the stack if
     /// necessary.
-    pub scratch_by_class: [Option<PReg>; 4],
+    pub scratch_by_class: [Option<PReg>; RegClass::MAX],
 
     /// Some `PReg`s can be designated as locations on the stack rather than
     /// actual registers. These can be used to tell the register allocator about

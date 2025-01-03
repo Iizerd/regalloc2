@@ -148,9 +148,14 @@ fn mach_env(no_of_regs: usize) -> MachineEnv {
                 .collect(),
             vec![],
             vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
         ],
-        non_preferred_regs_by_class: [vec![], vec![], vec![]],
-        scratch_by_class: [None, None, None],
+        non_preferred_regs_by_class: [vec![], vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
+        scratch_by_class: [None, None, None, None, None, None, None, None],
         fixed_stack_slots: vec![],
     }
 }
@@ -306,6 +311,11 @@ impl Function for RealFunction {
             RegClass::Int => 2,
             RegClass::Float => 4,
             RegClass::Vector => 8,
+            RegClass::StackCopy => 16,
+            RegClass::RegClass5 => 32,
+            RegClass::RegClass6 => 64,
+            RegClass::RegClass7 => 128,
+            RegClass::RegClass8 => 512,
         }
     }
 

@@ -5,7 +5,9 @@ use crate::{
     AllocationKind, Block, FxHashMap, Inst, InstPosition, Operand, OperandConstraint, OperandKind,
     OperandPos, PReg, PRegSet, RegClass, SpillSlot, VReg,
 };
+use crate::moves::MoveVecWithScratch;
 use alloc::vec::Vec;
+use smallvec::SmallVec;
 use core::convert::TryInto;
 use core::iter::FromIterator;
 use core::ops::{Index, IndexMut};
@@ -732,9 +734,17 @@ impl<'a, F: Function> Env<'a, F> {
         use OperandPos::*;
         trace!("Processing branch instruction {inst:?} in block {block:?}");
 
-        let mut int_parallel_moves = ParallelMoves::new();
-        let mut float_parallel_moves = ParallelMoves::new();
-        let mut vec_parallel_moves = ParallelMoves::new();
+        let mut all_parallel_moves: [ParallelMoves<Option<VReg>>; RegClass::MAX] = [
+                ParallelMoves::new(),
+                ParallelMoves::new(),
+                ParallelMoves::new(),
+                ParallelMoves::new(),
+                ParallelMoves::new(),
+                ParallelMoves::new(),
+                ParallelMoves::new(),
+                ParallelMoves::new(),
+            ];
+
 
         for (succ_idx, succ) in self.func.block_succs(block).iter().enumerate() {
             for (pos, vreg) in self
@@ -779,31 +789,28 @@ impl<'a, F: Function> Env<'a, F> {
                     );
                 }
                 self.vreg_allocs[vreg.vreg()] = vreg_spill;
-                let parallel_moves = match vreg.class() {
-                    RegClass::Int => &mut int_parallel_moves,
-                    RegClass::Float => &mut float_parallel_moves,
-                    RegClass::Vector => &mut vec_parallel_moves,
-                };
                 let from = Allocation::stack(self.vreg_spillslots[vreg.vreg()]);
                 let to = Allocation::stack(self.vreg_spillslots[succ_param_vreg.vreg()]);
                 trace!("Recording parallel move from {from} to {to}");
-                parallel_moves.add(from, to, Some(*vreg));
+                all_parallel_moves[vreg.class().index()].add(from, to, Some(*vreg));
             }
         }
 
-        let resolved_int = int_parallel_moves.resolve();
-        let resolved_float = float_parallel_moves.resolve();
-        let resolved_vec = vec_parallel_moves.resolve();
+
+        let mut all_resolved_parallel_moves = SmallVec::<[MoveVecWithScratch<Option<VReg>>; RegClass::MAX]>::new();
+        for parallel_moves in all_parallel_moves {
+            all_resolved_parallel_moves.push(parallel_moves.resolve());
+        }
+
         let mut scratch_regs = self.edits.scratch_regs.clone();
         let mut num_spillslots = self.stack.num_spillslots;
         let mut avail_regs = self.available_pregs[Early] & self.available_pregs[Late];
 
         trace!("Resolving parallel moves");
-        for (resolved, class) in [
-            (resolved_int, RegClass::Int),
-            (resolved_float, RegClass::Float),
-            (resolved_vec, RegClass::Vector),
-        ] {
+        for (class, resolved) in all_resolved_parallel_moves.into_iter().enumerate() {
+
+            let class = RegClass::from_index(class);
+
             let scratch_resolver = MoveAndScratchResolver {
                 find_free_reg: || {
                     if let Some(reg) = scratch_regs[class] {

@@ -10,6 +10,13 @@ use crate::alloc::vec::Vec;
 use crate::{domtree, postorder, Block, Function, Inst, ProgPoint, RegAllocError, VecExt};
 use smallvec::{smallvec, SmallVec};
 
+#[derive(Debug, Default)]
+pub struct CFGInfoCtx {
+    visited: Vec<bool>,
+    block_to_rpo: Vec<Option<u32>>,
+    backedge: Vec<u32>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct CFGInfo {
     /// Postorder traversal of blocks.

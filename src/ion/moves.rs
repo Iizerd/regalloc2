@@ -859,29 +859,23 @@ impl<'a, F: Function> Env<'a, F> {
             let mut vec_moves: SmallVec<[InsertedMove; 8]> = smallvec![];
             let mut stack_copy_moves: SmallVec<[InsertedMove; 8]> = smallvec![];
 
+            let mut moves_to_process: [SmallVec<[InsertedMove; 8]>; 8] = [
+                smallvec![],
+                smallvec![],
+                smallvec![],
+                smallvec![],
+                smallvec![],
+                smallvec![],
+                smallvec![],
+                smallvec![],
+            ];
+
             for m in moves {
-                match m.to_vreg.class() {
-                    RegClass::Int => {
-                        int_moves.push(m.clone());
-                    }
-                    RegClass::Float => {
-                        float_moves.push(m.clone());
-                    }
-                    RegClass::Vector => {
-                        vec_moves.push(m.clone());
-                    }
-                    RegClass::StackCopy => {
-                        stack_copy_moves.push(m.clone());
-                    }
-                }
+                moves_to_process[m.to_vreg.class().index()].push(m.clone());
             }
 
-            for &(regclass, moves) in &[
-                (RegClass::Int, &int_moves),
-                (RegClass::Float, &float_moves),
-                (RegClass::Vector, &vec_moves),
-                (RegClass::StackCopy, &stack_copy_moves),
-            ] {
+            for (regclass, moves) in moves_to_process.into_iter().enumerate() {
+                let regclass = RegClass::from_index(regclass);
                 // All moves in `moves` semantically happen in
                 // parallel. Let's resolve these to a sequence of moves
                 // that can be done one at a time.

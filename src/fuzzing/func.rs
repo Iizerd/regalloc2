@@ -127,6 +127,10 @@ impl Function for Func {
             RegClass::Float => 1,
             RegClass::Vector => 2,
             RegClass::StackCopy => 1,
+            RegClass::RegClass5 => 4,
+            RegClass::RegClass6 => 8,
+            RegClass::RegClass7 => 16,
+            RegClass::RegClass8 => 32,
         }
     }
 }
@@ -629,25 +633,38 @@ pub fn machine_env() -> MachineEnv {
     fn regs(r: core::ops::Range<usize>, c: RegClass) -> Vec<PReg> {
         r.map(|i| PReg::new(i, c)).collect()
     }
-    let preferred_regs_by_class: [Vec<PReg>; 4] = [
+    let preferred_regs_by_class: [Vec<PReg>; RegClass::MAX] = [
         regs(0..24, RegClass::Int),
         regs(0..24, RegClass::Float),
         regs(0..24, RegClass::Vector),
         regs(0..24, RegClass::StackCopy),
+        regs(0..24, RegClass::RegClass5),
+        regs(0..24, RegClass::RegClass6),
+        regs(0..24, RegClass::RegClass7),
+        regs(0..24, RegClass::RegClass8),
     ];
-    let non_preferred_regs_by_class: [Vec<PReg>; 4] = [
+    let non_preferred_regs_by_class: [Vec<PReg>; RegClass::MAX] = [
         regs(24..32, RegClass::Int),
         regs(24..32, RegClass::Float),
         regs(24..32, RegClass::Vector),
         regs(24..32, RegClass::StackCopy),
+        regs(24..32, RegClass::RegClass5),
+        regs(24..32, RegClass::RegClass6),
+        regs(24..32, RegClass::RegClass7),
+        regs(24..32, RegClass::RegClass8),
     ];
-    let scratch_by_class: [Option<PReg>; 4] = [None, None, None, None];
+    let scratch_by_class: [Option<PReg>; RegClass::MAX] = [None, None, None, None, None, None, None, None];
     let fixed_stack_slots = (32..63)
         .flat_map(|i| {
             [
                 PReg::new(i, RegClass::Int),
                 PReg::new(i, RegClass::Float),
                 PReg::new(i, RegClass::Vector),
+                PReg::new(i, RegClass::StackCopy),
+                PReg::new(i, RegClass::RegClass5),
+                PReg::new(i, RegClass::RegClass6),
+                PReg::new(i, RegClass::RegClass7),
+                PReg::new(i, RegClass::RegClass8),
             ]
         })
         .collect();
