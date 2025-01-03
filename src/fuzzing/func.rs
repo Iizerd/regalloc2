@@ -26,7 +26,6 @@ pub struct InstData {
     op: InstOpcode,
     operands: Vec<Operand>,
     clobbers: Vec<PReg>,
-    is_safepoint: bool,
 }
 
 impl InstData {
@@ -35,7 +34,6 @@ impl InstData {
             op: InstOpcode::Branch,
             operands: vec![],
             clobbers: vec![],
-            is_safepoint: false,
         }
     }
     pub fn ret() -> InstData {
@@ -43,7 +41,6 @@ impl InstData {
             op: InstOpcode::Ret,
             operands: vec![],
             clobbers: vec![],
-            is_safepoint: false,
         }
     }
 }
@@ -101,14 +98,6 @@ impl Function for Func {
 
     fn branch_blockparams(&self, block: Block, _: Inst, succ: usize) -> &[VReg] {
         &self.block_params_out[block.index()][succ][..]
-    }
-
-    fn requires_refs_on_stack(&self, insn: Inst) -> bool {
-        self.insts[insn.index()].is_safepoint
-    }
-
-    fn reftype_vregs(&self) -> &[VReg] {
-        &self.reftype_vregs[..]
     }
 
     fn debug_value_labels(&self) -> &[(VReg, Inst, Inst, u32)] {
@@ -200,13 +189,20 @@ impl FuncBuilder {
     }
 
     fn compute_doms(&mut self) {
-        self.postorder = postorder::calculate(self.f.blocks.len(), Block::new(0), |block| {
-            &self.f.block_succs[block.index()][..]
-        });
-        self.idom = domtree::calculate(
+        let f = &self.f;
+        postorder::calculate(
             self.f.blocks.len(),
-            |block| &self.f.block_preds[block.index()][..],
+            Block::new(0),
+            &mut vec![],
+            &mut self.postorder,
+            |block| &f.block_succs[block.index()][..],
+        );
+        domtree::calculate(
+            self.f.blocks.len(),
+            |block| &f.block_preds[block.index()][..],
             &self.postorder[..],
+            &mut vec![],
+            &mut self.idom,
             Block::new(0),
         );
     }
@@ -516,19 +512,12 @@ impl Func {
                     )));
                 }
 
-                let is_safepoint = opts.reftypes
-                    && operands
-                        .iter()
-                        .all(|op| !builder.f.reftype_vregs.contains(&op.vreg()))
-                    && bool::arbitrary(u)?;
-
                 builder.add_inst(
                     Block::new(block),
                     InstData {
                         op: InstOpcode::Op,
                         operands,
                         clobbers,
-                        is_safepoint,
                     },
                 );
                 avail.push(vreg);
@@ -584,9 +573,6 @@ impl Func {
 impl core::fmt::Debug for Func {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "{{\n")?;
-        for vreg in self.reftype_vregs() {
-            write!(f, "  REF: {}\n", vreg)?;
-        }
         for (i, blockrange) in self.blocks.iter().enumerate() {
             let succs = self.block_succs[i]
                 .iter()
@@ -621,9 +607,6 @@ impl core::fmt::Debug for Func {
                 i, params_in, succs, preds
             )?;
             for inst in blockrange.iter() {
-                if self.requires_refs_on_stack(inst) {
-                    write!(f, "    -- SAFEPOINT --\n")?;
-                }
                 write!(
                     f,
                     "    inst{}: {:?} ops:{:?} clobber:{:?}\n",

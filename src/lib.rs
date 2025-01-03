@@ -11,6 +11,7 @@
  */
 
 #![allow(dead_code)]
+#![allow(clippy::all)]
 #![no_std]
 
 #[cfg(feature = "std")]
@@ -34,14 +35,17 @@ macro_rules! trace_enabled {
     };
 }
 
-use core::hash::BuildHasherDefault;
-use ion::data_structures::Env;
+use alloc::rc::Rc;
+use allocator_api2::vec::Vec as Vec2;
+use core::ops::Deref as _;
+use core::{hash::BuildHasherDefault, iter::FromIterator};
 use rustc_hash::FxHasher;
 type FxHashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 type FxHashSet<V> = hashbrown::HashSet<V, BuildHasherDefault<FxHasher>>;
 
 pub(crate) mod cfg;
 pub(crate) mod domtree;
+pub(crate) mod fastalloc;
 pub mod indexset;
 pub mod ion;
 pub(crate) mod moves;
@@ -51,6 +55,7 @@ pub mod ssa;
 #[macro_use]
 mod index;
 
+pub use self::ion::data_structures::Ctx;
 use alloc::vec::Vec;
 pub use index::{Block, Inst, InstRange};
 
@@ -85,6 +90,31 @@ pub enum RegClass {
     Float = 1,
     Vector = 2,
     StackCopy = 3,
+    RegClass5 = 4,
+    RegClass6 = 5,
+    RegClass7 = 6,
+    RegClass8 = 7,
+}
+impl RegClass {
+    pub const BITS: usize = 3;
+    pub const BITS_MASK: u64 = 0b111;
+    pub const MAX: usize = 7;
+    pub fn index(&self) -> usize {
+        *self as usize
+    }
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            0 => RegClass::Int,
+            1 => RegClass::Float,
+            2 => RegClass::Vector,
+            3 => RegClass::StackCopy,
+            4 => RegClass::RegClass5,
+            5 => RegClass::RegClass6,
+            6 => RegClass::RegClass7,
+            7 => RegClass::RegClass8,
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// A physical register. Contains a physical register number and a class.
@@ -160,6 +190,12 @@ impl PReg {
     #[inline(always)]
     pub const fn invalid() -> Self {
         PReg::new(Self::MAX, RegClass::Int)
+    }
+}
+
+impl Default for PReg {
+    fn default() -> Self {
+        Self::invalid()
     }
 }
 
@@ -254,6 +290,44 @@ impl PRegSet {
             self.bits[i] |= other.bits[i];
         }
     }
+
+    pub fn intersect_from(&mut self, other: PRegSet) {
+        for i in 0..self.bits.len() {
+            self.bits[i] &= other.bits[i];
+        }
+    }
+
+    pub fn invert(&self) -> PRegSet {
+        let mut set = self.bits;
+        for i in 0..self.bits.len() {
+            set[i] = !self.bits[i];
+        }
+        PRegSet { bits: set }
+    }
+
+    pub fn is_empty(&self, regclass: RegClass) -> bool {
+        self.bits[regclass as usize] == 0
+    }
+}
+
+impl core::ops::BitAnd<PRegSet> for PRegSet {
+    type Output = PRegSet;
+
+    fn bitand(self, rhs: PRegSet) -> Self::Output {
+        let mut out = self;
+        out.intersect_from(rhs);
+        out
+    }
+}
+
+impl core::ops::BitOr<PRegSet> for PRegSet {
+    type Output = PRegSet;
+
+    fn bitor(self, rhs: PRegSet) -> Self::Output {
+        let mut out = self;
+        out.union_from(rhs);
+        out
+    }
 }
 
 impl IntoIterator for PRegSet {
@@ -305,6 +379,26 @@ impl From<&MachineEnv> for PRegSet {
         }
 
         res
+    }
+}
+
+impl FromIterator<PReg> for PRegSet {
+    fn from_iter<T: IntoIterator<Item = PReg>>(iter: T) -> Self {
+        let mut set = Self::default();
+        for preg in iter {
+            set.add(preg);
+        }
+        set
+    }
+}
+
+impl core::fmt::Display for PRegSet {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{{")?;
+        for preg in self.into_iter() {
+            write!(f, "{preg}, ")?;
+        }
+        write!(f, "}}")
     }
 }
 
@@ -367,6 +461,17 @@ impl VReg {
     #[inline(always)]
     pub const fn invalid() -> Self {
         VReg::new(Self::MAX, RegClass::Int)
+    }
+
+    #[inline(always)]
+    pub const fn bits(self) -> usize {
+        self.bits as usize
+    }
+}
+
+impl From<u32> for VReg {
+    fn from(value: u32) -> Self {
+        Self { bits: value }
     }
 }
 
@@ -464,8 +569,6 @@ pub enum OperandConstraint {
     Any,
     /// Operand must be in a register. Register is read-only for Uses.
     Reg,
-    /// Operand must be on the stack.
-    Stack,
     /// Operand must be in a fixed register.
     FixedReg(PReg),
     /// On defs only: reuse a use's register.
@@ -477,7 +580,6 @@ impl core::fmt::Display for OperandConstraint {
         match self {
             Self::Any => write!(f, "any"),
             Self::Reg => write!(f, "reg"),
-            Self::Stack => write!(f, "stack"),
             Self::FixedReg(preg) => write!(f, "fixed({})", preg),
             Self::Reuse(idx) => write!(f, "reuse({})", idx),
         }
@@ -573,7 +675,6 @@ impl Operand {
         let constraint_field = match constraint {
             OperandConstraint::Any => 0,
             OperandConstraint::Reg => 1,
-            OperandConstraint::Stack => 2,
             OperandConstraint::FixedReg(preg) => {
                 debug_assert_eq!(preg.class(), vreg.class());
                 0b1000000 | preg.hw_enc() as u32
@@ -861,7 +962,6 @@ impl Operand {
             match constraint_field {
                 0 => OperandConstraint::Any,
                 1 => OperandConstraint::Reg,
-                2 => OperandConstraint::Stack,
                 _ => unreachable!(),
             }
         }
@@ -1116,20 +1216,6 @@ pub trait Function {
     /// for each respective successor block.
     fn branch_blockparams(&self, block: Block, insn: Inst, succ_idx: usize) -> &[VReg];
 
-    /// Determine whether an instruction requires all reference-typed
-    /// values to be placed onto the stack. For these instructions,
-    /// stackmaps will be provided.
-    ///
-    /// This is usually associated with the concept of a "safepoint",
-    /// though strictly speaking, a safepoint could also support
-    /// reference-typed values in registers if there were a way to
-    /// denote their locations and if this were acceptable to the
-    /// client. Usually garbage-collector implementations want to see
-    /// roots on the stack, so we do that for now.
-    fn requires_refs_on_stack(&self, _: Inst) -> bool {
-        false
-    }
-
     // --------------------------
     // Instruction register slots
     // --------------------------
@@ -1171,24 +1257,6 @@ pub trait Function {
 
     /// Get the number of `VReg` in use in this function.
     fn num_vregs(&self) -> usize;
-
-    /// Get the VRegs that are pointer/reference types. This has the
-    /// following effects for each such vreg:
-    ///
-    /// - At all safepoint instructions, the vreg will be in a
-    ///   SpillSlot, not in a register.
-    /// - The vreg *may not* be used as a register operand on
-    ///   safepoint instructions: this is because a vreg can only live
-    ///   in one place at a time. The client should copy the value to an
-    ///   integer-typed vreg and use this to pass a pointer as an input
-    ///   to a safepoint instruction (such as a function call).
-    /// - At all safepoint instructions, all live vregs' locations
-    ///   will be included in a list in the `Output` below, so that
-    ///   pointer-inspecting/updating functionality (such as a moving
-    ///   garbage collector) may observe and edit their values.
-    fn reftype_vregs(&self) -> &[VReg] {
-        &[]
-    }
 
     /// Get the VRegs for which we should generate value-location
     /// metadata for debugging purposes. This can be used to generate
@@ -1358,6 +1426,11 @@ impl ProgPoint {
     pub fn from_index(index: u32) -> Self {
         Self { bits: index }
     }
+
+    #[inline(always)]
+    pub fn invalid() -> Self {
+        Self::before(Inst::new(usize::MAX))
+    }
 }
 
 /// An instruction to insert into the program to perform some data movement.
@@ -1481,12 +1554,6 @@ pub struct Output {
     /// Allocation offset in `allocs` for each instruction.
     pub inst_alloc_offsets: Vec<u32>,
 
-    /// Safepoint records: at a given program point, a reference-typed value
-    /// lives in the given Allocation. Currently these are guaranteed to be
-    /// stack slots, but in the future an option may be added to allow
-    /// reftype value to be kept in registers at safepoints.
-    pub safepoint_slots: Vec<(ProgPoint, Allocation)>,
-
     /// Debug info: a labeled value (as applied to vregs by
     /// `Function::debug_value_labels()` on the input side) is located
     /// in the given allocation from the first program point
@@ -1580,21 +1647,41 @@ pub fn run<F: Function>(
     env: &MachineEnv,
     options: &RegallocOptions,
 ) -> Result<Output, RegAllocError> {
-    ion::run(func, env, options.verbose_log, options.validate_ssa)
+    match options.algorithm {
+        Algorithm::Ion => {
+            let mut ctx = Ctx::default();
+            run_with_ctx(func, env, options, &mut ctx)?;
+            Ok(ctx.output)
+        }
+        Algorithm::Fastalloc => {
+            fastalloc::run(func, env, options.verbose_log, options.validate_ssa)
+        }
+    }
 }
 
-/// Run the allocator.
-pub fn run_into<F: Function>(
+/// Run the allocator with reusable context.
+///
+/// Return value points to `ctx.output` that can be alternatively `std::mem::take`n.
+pub fn run_with_ctx<'a, F: Function>(
+    func: &F,
+    env: &MachineEnv,
     options: &RegallocOptions,
-    output: &mut Output,
-    regalloc_env: &mut Env<F>,
-) -> Result<(), RegAllocError> {
-    ion::run_into(
-        options.verbose_log,
-        options.validate_ssa,
-        output,
-        regalloc_env,
-    )
+    ctx: &'a mut Ctx,
+) -> Result<&'a Output, RegAllocError> {
+    match options.algorithm {
+        Algorithm::Ion => ion::run(func, env, ctx, options.verbose_log, options.validate_ssa)?,
+        Algorithm::Fastalloc => {
+            ctx.output = fastalloc::run(func, env, options.verbose_log, options.validate_ssa)?
+        }
+    }
+    Ok(&ctx.output)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub enum Algorithm {
+    #[default]
+    Ion,
+    Fastalloc,
 }
 
 /// Options for allocation.
@@ -1605,4 +1692,97 @@ pub struct RegallocOptions {
 
     /// Run the SSA validator before allocating registers.
     pub validate_ssa: bool,
+
+    /// The register allocation algorithm to be used.
+    pub algorithm: Algorithm,
+}
+
+pub(crate) trait VecExt<T> {
+    /// Fills `self` with `value` up to `len` and return the mutable slice to the values.
+    fn repopulate(&mut self, len: usize, value: T) -> &mut [T]
+    where
+        T: Clone;
+    /// Clears the `self` and returns a mutable reference to it.
+    fn cleared(&mut self) -> &mut Self;
+    /// Makes sure `self` is empty and has at least `cap` capacity.
+    fn preallocate(&mut self, cap: usize) -> &mut Self;
+}
+
+impl<T> VecExt<T> for Vec<T> {
+    fn repopulate(&mut self, len: usize, value: T) -> &mut [T]
+    where
+        T: Clone,
+    {
+        self.clear();
+        self.resize(len, value);
+        self
+    }
+
+    fn cleared(&mut self) -> &mut Self {
+        self.clear();
+        self
+    }
+
+    fn preallocate(&mut self, cap: usize) -> &mut Self {
+        self.clear();
+        self.reserve(cap);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Bump(Rc<bumpalo::Bump>);
+
+impl Bump {
+    pub(crate) fn get_mut(&mut self) -> Option<&mut bumpalo::Bump> {
+        Rc::get_mut(&mut self.0)
+    }
+}
+
+// Simply delegating because `Rc<bumpalo::Bump>` does not implement `Allocator`.
+unsafe impl allocator_api2::alloc::Allocator for Bump {
+    fn allocate(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+        self.0.deref().allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+        self.0.deref().deallocate(ptr, layout);
+    }
+
+    fn allocate_zeroed(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+        self.0.deref().allocate_zeroed(layout)
+    }
+
+    unsafe fn grow(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+        self.0.deref().grow(ptr, old_layout, new_layout)
+    }
+
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+        self.0.deref().grow_zeroed(ptr, old_layout, new_layout)
+    }
+
+    unsafe fn shrink(
+        &self,
+        ptr: core::ptr::NonNull<u8>,
+        old_layout: core::alloc::Layout,
+        new_layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+        self.0.deref().shrink(ptr, old_layout, new_layout)
+    }
 }

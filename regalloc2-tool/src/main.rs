@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use regalloc2::{
-    checker::Checker, serialize::SerializableFunction, Block, Edit, Function, InstOrEdit, Output,
-    RegallocOptions,
+    checker::Checker, serialize::SerializableFunction, Algorithm, Block, Edit, Function,
+    InstOrEdit, Output, RegallocOptions,
 };
 
 #[derive(Parser)]
@@ -15,6 +15,24 @@ struct Args {
 
     /// Input file containing a bincode-encoded SerializedFunction.
     input: PathBuf,
+
+    /// Which register allocation algorithm to use.
+    algorithm: CliAlgorithm,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum CliAlgorithm {
+    Ion,
+    Fastalloc,
+}
+
+impl From<CliAlgorithm> for Algorithm {
+    fn from(cli_algo: CliAlgorithm) -> Algorithm {
+        match cli_algo {
+            CliAlgorithm::Ion => Algorithm::Ion,
+            CliAlgorithm::Fastalloc => Algorithm::Fastalloc,
+        }
+    }
 }
 
 fn main() {
@@ -32,6 +50,7 @@ fn main() {
     let options = RegallocOptions {
         verbose_log: true,
         validate_ssa: true,
+        algorithm: args.algorithm.into(),
     };
     let output = match regalloc2::run(&function, function.machine_env(), &options) {
         Ok(output) => output,
@@ -52,7 +71,7 @@ fn main() {
 }
 
 fn print_output(func: &SerializableFunction, output: &Output) {
-    print!("Register allocation result: {{\n");
+    println!("Register allocation result: {{");
     for i in 0..func.num_blocks() {
         let block = Block::new(i);
         let succs = func
@@ -65,7 +84,7 @@ fn print_output(func: &SerializableFunction, output: &Output) {
             .iter()
             .map(|b| b.index())
             .collect::<Vec<_>>();
-        print!("  block{}: # succs:{:?} preds:{:?}\n", i, succs, preds);
+        println!("  block{}: # succs:{:?} preds:{:?}", i, succs, preds);
         for inst_or_edit in output.block_insts_and_edits(func, block) {
             match inst_or_edit {
                 InstOrEdit::Inst(inst) => {
@@ -83,13 +102,13 @@ fn print_output(func: &SerializableFunction, output: &Output) {
                         .map(|(op, alloc)| format!("{op} => {alloc}"))
                         .collect();
                     let ops = ops.join(", ");
-                    print!("    inst{}: {op} {ops}\n", inst.index(),);
+                    println!("    inst{}: {op} {ops}", inst.index(),);
                 }
                 InstOrEdit::Edit(Edit::Move { from, to }) => {
-                    print!("    edit: move {to} <- {from}\n");
+                    println!("    edit: move {to} <- {from}");
                 }
             }
         }
     }
-    print!("}}\n");
+    println!("}}");
 }

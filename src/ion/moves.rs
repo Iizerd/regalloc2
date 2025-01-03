@@ -12,9 +12,11 @@
 
 //! Move resolution.
 
+use alloc::vec;
+
 use super::{
     Env, InsertMovePrio, InsertedMove, InsertedMoves, LiveRangeFlag, LiveRangeIndex,
-    RedundantMoveEliminator, VRegIndex, SLOT_NONE,
+    RedundantMoveEliminator, VRegIndex,
 };
 use crate::ion::data_structures::{
     u64_key, BlockparamIn, BlockparamOut, CodeRange, Edits, FixedRegFixupLevel, LiveRangeKey,
@@ -26,36 +28,38 @@ use crate::{
     Allocation, Block, Edit, Function, FxHashMap, Inst, InstPosition, OperandConstraint,
     OperandKind, OperandPos, PReg, ProgPoint, RegClass, SpillSlot,
 };
+use alloc::format;
 use alloc::vec::Vec;
-use alloc::{format, vec};
 use hashbrown::hash_map::Entry;
 use smallvec::{smallvec, SmallVec};
 
 impl<'a, F: Function> Env<'a, F> {
     pub fn is_start_of_block(&self, pos: ProgPoint) -> bool {
-        let block = self.cfginfo.insn_block[pos.inst().index()];
-        pos == self.cfginfo.block_entry[block.index()]
+        let block = self.ctx.cfginfo.insn_block[pos.inst().index()];
+        pos == self.ctx.cfginfo.block_entry[block.index()]
     }
     pub fn is_end_of_block(&self, pos: ProgPoint) -> bool {
-        let block = self.cfginfo.insn_block[pos.inst().index()];
-        pos == self.cfginfo.block_exit[block.index()]
+        let block = self.ctx.cfginfo.insn_block[pos.inst().index()];
+        pos == self.ctx.cfginfo.block_exit[block.index()]
     }
 
     pub fn get_alloc(&self, inst: Inst, slot: usize) -> Allocation {
-        let inst_allocs = &self.allocs[self.inst_alloc_offsets[inst.index()] as usize..];
+        let inst_allocs =
+            &self.ctx.output.allocs[self.ctx.output.inst_alloc_offsets[inst.index()] as usize..];
         inst_allocs[slot]
     }
 
     pub fn set_alloc(&mut self, inst: Inst, slot: usize, alloc: Allocation) {
-        let inst_allocs = &mut self.allocs[self.inst_alloc_offsets[inst.index()] as usize..];
+        let inst_allocs = &mut self.ctx.output.allocs
+            [self.ctx.output.inst_alloc_offsets[inst.index()] as usize..];
         inst_allocs[slot] = alloc;
     }
 
     pub fn get_alloc_for_range(&self, range: LiveRangeIndex) -> Allocation {
         trace!("get_alloc_for_range: {:?}", range);
-        let bundle = self.ranges[range].bundle;
+        let bundle = self.ctx.ranges[range].bundle;
         trace!(" -> bundle: {:?}", bundle);
-        let bundledata = &self.bundles[bundle];
+        let bundledata = &self.ctx.bundles[bundle];
         trace!(" -> allocation {:?}", bundledata.allocation);
         if bundledata.allocation != Allocation::none() {
             bundledata.allocation
@@ -63,9 +67,9 @@ impl<'a, F: Function> Env<'a, F> {
             trace!(" -> spillset {:?}", bundledata.spillset);
             trace!(
                 " -> spill slot {:?}",
-                self.spillsets[bundledata.spillset].slot
+                self.ctx.spillsets[bundledata.spillset].slot
             );
-            self.spillslots[self.spillsets[bundledata.spillset].slot.index()].alloc
+            self.ctx.spillslots[self.ctx.spillsets[bundledata.spillset].slot.index()].alloc
         }
     }
 
@@ -78,9 +82,9 @@ impl<'a, F: Function> Env<'a, F> {
 
         // Now that all splits are done, we can pay the cost once to
         // sort VReg range lists and update with the final ranges.
-        for vreg in &mut self.vregs {
+        for vreg in &mut self.ctx.vregs {
             for entry in &mut vreg.ranges {
-                entry.range = self.ranges[entry.index].range;
+                entry.range = self.ctx.ranges[entry.index].range;
             }
             vreg.ranges.sort_unstable_by_key(|entry| entry.range.from);
         }
@@ -563,11 +567,7 @@ impl<'a, F: Function> Env<'a, F> {
                     let inst = usedata.pos.inst();
                     let slot = usedata.slot;
                     let operand = usedata.operand;
-                    // Safepoints add virtual uses with no slots;
-                    // avoid these.
-                    if slot != SLOT_NONE {
-                        self.set_alloc(inst, slot as usize, alloc);
-                    }
+                    self.set_alloc(inst, slot as usize, alloc);
                     if let OperandConstraint::Reuse(_) = operand.constraint() {
                         reuse_input_insts.push(inst);
                     }
@@ -614,13 +614,16 @@ impl<'a, F: Function> Env<'a, F> {
                         let from = core::cmp::max(label_from, range.from);
                         let to = core::cmp::min(label_to, range.to);
 
-                        self.debug_locations.push((label, from, to, alloc));
+                        self.ctx
+                            .output
+                            .debug_locations
+                            .push((label, from, to, alloc));
                     }
                 }
             }
 
             if !inter_block_dests.is_empty() {
-                self.stats.halfmoves_count += inter_block_dests.len() * 2;
+                self.output.stats.halfmoves_count += inter_block_dests.len() * 2;
 
                 inter_block_dests.sort_unstable_by_key(InterBlockDest::key);
 
@@ -646,8 +649,8 @@ impl<'a, F: Function> Env<'a, F> {
         }
 
         if !block_param_dests.is_empty() {
-            self.stats.halfmoves_count += block_param_sources.len();
-            self.stats.halfmoves_count += block_param_dests.len();
+            self.output.stats.halfmoves_count += block_param_sources.len();
+            self.output.stats.halfmoves_count += block_param_dests.len();
 
             trace!("processing block-param moves");
             for dest in block_param_dests {
@@ -767,7 +770,7 @@ impl<'a, F: Function> Env<'a, F> {
 
         // Sort the debug-locations vector; we provide this
         // invariant to the client.
-        self.debug_locations.sort_unstable();
+        self.output.debug_locations.sort_unstable();
 
         inserted_moves
     }
@@ -789,19 +792,12 @@ impl<'a, F: Function> Env<'a, F> {
             from: ProgPoint,
             to: ProgPoint,
         ) {
-            // If any safepoints in range, clear and return.
-            // Also, if we cross a block boundary, clear and return.
+            // If we cross a block boundary, clear and return.
             if this.cfginfo.insn_block[from.inst().index()]
                 != this.cfginfo.insn_block[to.inst().index()]
             {
                 redundant_moves.clear();
                 return;
-            }
-            for inst in from.inst().index()..=to.inst().index() {
-                if this.func.requires_refs_on_stack(Inst::new(inst)) {
-                    redundant_moves.clear();
-                    return;
-                }
             }
 
             let start_inst = if from.pos() == InstPosition::Before {
@@ -1004,7 +1000,7 @@ impl<'a, F: Function> Env<'a, F> {
         // parallel-move resolver for all moves within a single sort
         // key.
         edits.sort();
-        self.stats.edits_count = edits.len();
+        self.output.stats.edits_count = edits.len();
 
         // Add debug annotations.
         if self.annotations_enabled {

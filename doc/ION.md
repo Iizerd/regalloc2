@@ -1,216 +1,11 @@
-# regalloc2 Design Overview
+# Ion Design Overview
 
-This document describes the basic architecture of the regalloc2
-register allocator. It describes the externally-visible interface
-(input CFG, instructions, operands, with their invariants; meaning of
-various parts of the output); core data structures; and the allocation
+This document describes the basic architecture of the Ion
+register allocator. It describes the core data structures; and the allocation
 pipeline, or series of algorithms that compute an allocation. It ends
 with a description of future work and expectations, as well as an
 appendix that notes design influences and similarities to the
 IonMonkey backtracking allocator.
-
-# API, Input IR and Invariants
-
-The toplevel API to regalloc2 consists of a single entry point `run()`
-that takes a register environment, which specifies all physical
-registers, and the input program. The function returns either an error
-or an `Output` struct that provides allocations for each operand and a
-vector of additional instructions (moves, loads, stores) to insert.
-
-## Register Environment
-
-The allocator takes a `MachineEnv` which specifies, for each of the
-two register classes `Int` and `Float`, a vector of `PReg`s by index. A
-`PReg` is nothing more than the class and index within the class; the
-allocator does not need to know anything more.
-
-The `MachineEnv` provides a vector of preferred and non-preferred
-physical registers per class. Any register not in either vector will
-not be allocated. Usually, registers that do not need to be saved in
-the prologue if used (i.e., caller-save registers) are given in the
-"preferred" vector. The environment also provides exactly one scratch
-register per class. This register must not be in the preferred or
-non-preferred vectors, and is used whenever a set of moves that need
-to occur logically in parallel have a cycle (for a simple example,
-consider a swap `r0, r1 := r1, r0`).
-
-With some more work, we could potentially remove the need for the
-scratch register by requiring support for an additional edit type from
-the client ("swap"), but we have not pursued this.
-
-## CFG and Instructions
-
-The allocator operates on an input program that is in a standard CFG
-representation: the function body is a sequence of basic blocks, and
-each block has a sequence of instructions and zero or more
-successors. The allocator also requires the client to provide
-predecessors for each block, and these must be consistent with the
-successors.
-
-Instructions are opaque to the allocator except for a few important
-bits: (1) `is_ret` (is a return instruction); (2) `is_branch` (is a
-branch instruction); and (3) a vector of Operands, covered below.
-Every block must end in a return or branch.
-
-Both instructions and blocks are named by indices in contiguous index
-spaces. A block's instructions must be a contiguous range of
-instruction indices, and block i's first instruction must come
-immediately after block i-1's last instruction.
-
-The CFG must have *no critical edges*. A critical edge is an edge from
-block A to block B such that A has more than one successor *and* B has
-more than one predecessor. For this definition, the entry block has an
-implicit predecessor, and any block that ends in a return has an
-implicit successor.
-
-Note that there are *no* requirements related to the ordering of
-blocks, and there is no requirement that the control flow be
-reducible. Some *heuristics* used by the allocator will perform better
-if the code is reducible and ordered in reverse postorder (RPO),
-however: in particular, (1) this interacts better with the
-contiguous-range-of-instruction-indices live range representation that
-we use, and (2) the "approximate loop depth" metric will actually be
-exact if both these conditions are met.
-
-## Operands and VRegs
-
-Every instruction operates on values by way of `Operand`s. An operand
-consists of the following fields:
-
-- VReg, or virtual register. *Every* operand mentions a virtual
-  register, even if it is constrained to a single physical register in
-  practice. This is because we track liveranges uniformly by vreg.
-  
-- Policy, or "constraint". Every reference to a vreg can apply some
-  constraint to the vreg at that point in the program. Valid policies are:
-  
-  - Any location;
-  - Any register of the vreg's class;
-  - Any stack slot;
-  - A particular fixed physical register; or
-  - For a def (output), a *reuse* of an input register.
-  
-- The "kind" of reference to this vreg: Def, Use, Mod. A def
-  (definition) writes to the vreg, and disregards any possible earlier
-  value. A mod (modify) reads the current value then writes a new
-  one. A use simply reads the vreg's value.
-  
-- The position: before or after the instruction.
-  - Note that to have a def (output) register available in a way that
-    does not conflict with inputs, the def should be placed at the
-    "before" position. Similarly, to have a use (input) register
-    available in a way that does not conflict with outputs, the use
-    should be placed at the "after" position.
-
-VRegs, or virtual registers, are specified by an index and a register
-class (Float or Int). The classes are not given separately; they are
-encoded on every mention of the vreg. (In a sense, the class is an
-extra index bit, or part of the register name.) The input function
-trait does require the client to provide the exact vreg count,
-however.
-
-Implementation note: both vregs and operands are bit-packed into
-u32s. This is essential for memory-efficiency. As a result of the
-operand bit-packing in particular (including the policy constraints!),
-the allocator supports up to 2^21 (2M) vregs per function, and 2^6
-(64) physical registers per class. Later we will also see a limit of
-2^20 (1M) instructions per function. These limits are considered
-sufficient for the anticipated use-cases (e.g., compiling Wasm, which
-also has function-size implementation limits); for larger functions,
-it is likely better to use a simpler register allocator in any case.
-
-## Reuses and Two-Address ISAs
-
-Some instruction sets primarily have instructions that name only two
-registers for a binary operator, rather than three: both registers are
-inputs, and the result is placed in one of the registers, clobbering
-its original value. The most well-known modern example is x86. It is
-thus imperative that we support this pattern well in the register
-allocator.
-
-This instruction-set design is somewhat at odds with an SSA
-representation, where a value cannot be redefined.
-
-Thus, the allocator supports a useful fiction of sorts: the
-instruction can be described as if it has three register mentions --
-two inputs and a separate output -- and neither input will be
-clobbered. The output, however, is special: its register-placement
-policy is "reuse input i" (where i == 0 or 1). The allocator
-guarantees that the register assignment for that input and the output
-will be the same, so the instruction can use that register as its
-"modifies" operand. If the input is needed again later, the allocator
-will take care of the necessary copying.
-
-We will see below how the allocator makes this work by doing some
-preprocessing so that the core allocation algorithms do not need to
-worry about this constraint.
-
-## SSA
-
-regalloc2 takes an SSA IR as input, where the usual definitions apply:
-every vreg is defined exactly once, and every vreg use is dominated by
-its one def. (Using blockparams means that we do not need additional
-conditions for phi-nodes.)
-
-## Block Parameters
-
-Every block can have *block parameters*, and a branch to a block with
-block parameters must provide values for those parameters via
-operands. When a branch has more than one successor, it provides
-separate operands for each possible successor. These block parameters
-are equivalent to phi-nodes; we chose this representation because they
-are in many ways a more consistent representation of SSA. 
-
-To see why we believe block parameters are a slightly nicer design
-choice than use of phi nodes, consider: phis are special
-pseudoinstructions that must come first in a block, are all defined in
-parallel, and whose uses occur on the edge of a particular
-predecessor. All of these facts complicate any analysis that scans
-instructions and reasons about uses and defs. It is much closer to the
-truth to actually put those uses *in* the predecessor, on the branch,
-and put all the defs at the top of the block as a separate kind of
-def. The tradeoff is that a vreg's def now has two possibilities --
-ordinary instruction def or blockparam def -- but this is fairly
-reasonable to handle.
-
-## Output
-
-The allocator produces two main data structures as output: an array of
-`Allocation`s and a sequence of edits. Some other data, such as
-stackmap slot info, is also provided.
-
-### Allocations
-
-The allocator provides an array of `Allocation` values, one per
-`Operand`. Each `Allocation` has a kind and an index. The kind may
-indicate that this is a physical register or a stack slot, and the
-index gives the respective register or slot. All allocations will
-conform to the constraints given, and will faithfully preserve the
-dataflow of the input program.
-
-### Inserted Moves
-
-In order to implement the necessary movement of data between
-allocations, the allocator needs to insert moves at various program
-points.
-
-The vector of inserted moves contains tuples that name a program point
-and an "edit". The edit is either a move, from one `Allocation` to
-another, or else a kind of metadata used by the checker to know which
-VReg is live in a given allocation at any particular time. The latter
-sort of edit can be ignored by a backend that is just interested in
-generating machine code.
-
-Note that the allocator will never generate a move from one stackslot
-directly to another, by design. Instead, if it needs to do so, it will
-make use of the scratch register. (Sometimes such a move occurs when
-the scratch register is already holding a value, e.g. to resolve a
-cycle of moves; in this case, it will allocate another spillslot and
-spill the original scratch value around the move.)
-
-Thus, the single "edit" type can become either a register-to-register
-move, a load from a stackslot into a register, or a store from a
-register into a stackslot.
 
 # Data Structures
 
@@ -229,8 +24,7 @@ The livein and liveout bitsets (`liveins` and `liveouts` on the `Env`)
 are allocated one per basic block and record, per block, which vregs
 are live entering and leaving that block. They are computed using a
 standard backward iterative dataflow analysis and are exact; they do
-not over-approximate (this turns out to be important for performance,
-and is also necessary for correctness in the case of stackmaps).
+not over-approximate (this turns out to be important for performance).
 
 ### Blockparam Vectors: Source-Side and Dest-Side
 
@@ -631,7 +425,7 @@ them all here.
   across its entire range. This has the effect of causing bundles to
   be more important (more likely to evict others) the more they are
   split.
-  
+
 - Requirement: a bundle's requirement is a value in a lattice that we
   have defined, where top is "Unknown" and bottom is
   "Conflict". Between these two, we have: any register (of a class);
@@ -640,7 +434,7 @@ them all here.
   different requirements meets to Conflict. Requirements are derived
   from the operand constraints for all uses in all liveranges in a
   bundle, and then merged with the lattice meet-function.
-  
+
 The lattice is as follows (diagram simplified to remove multiple
 classes and multiple fixed registers which parameterize nodes; any two
 differently-parameterized values are unordered with respect to each
@@ -648,14 +442,11 @@ other):
 
 ```plain
 
-        ___Unknown_____
-        |      |      |
-        |      |      |
-        | ____Any(rc) |
-        |/     |      |
-   Stack(rc)  FixedReg(reg)
-         \    /
-        Conflict
+                         Any(rc)
+                        /       \
+              FixedReg(reg)   FixedStack(reg)
+                        \       /
+                         Conflict
 ```
 
 Once we have the Requirement for a bundle, we can decide what to do.
@@ -666,12 +457,6 @@ If the requirement indicates that no register is needed (`Unknown` or
 `Any`, i.e. a register or stack slot would be OK), *and* if the spill
 bundle already exists for this bundle's spillset, then we move all the
 liveranges over to the spill bundle, as described above.
-
-If the requirement indicates that the stack is needed explicitly
-(e.g., for a safepoint), we set our spillset as "required" (this will
-cause it to allocate a spillslot) and return; because the bundle has
-no other allocation set, it will look to the spillset's spillslot by
-default.
 
 If the requirement indicates a conflict, we immediately split and
 requeue the split pieces. This split is performed at the point at
@@ -1185,13 +970,13 @@ similarities than the differences.
 
 * The core abstractions of "liverange", "bundle", "vreg", "preg", and
   "operand" (with policies/constraints) are the same.
-  
+
 * The overall allocator pipeline is the same, and the top-level
   structure of each stage should look similar. Both allocators begin
   by computing liveranges, then merging bundles, then handling bundles
   and splitting/evicting as necessary, then doing second-chance
   allocation, then reifying the decisions.
-  
+
 * The cost functions are very similar, though the heuristics that make
   decisions based on them are not.
 
@@ -1213,7 +998,7 @@ Several notable high-level differences are:
   and does not depend on scanning the code at all. In general, we
   should be able to state simple invariants and see by inspection (as
   well as fuzzing -- see above) that they hold.
-  
+
 * The data structures themselves are simplified. Where IonMonkey uses
   linked lists in many places, this allocator stores simple inline
   smallvecs of liveranges on bundles and vregs, and smallvecs of uses
@@ -1221,25 +1006,25 @@ Several notable high-level differences are:
   in-order immediately, without any need for splicing, unlike
   IonMonkey, and (ii) relax sorting invariants where possible to allow
   for cheap append operations in many cases.
-  
+
 * The splitting heuristics are significantly reworked. Whereas
   IonMonkey has an all-at-once approach to splitting an entire bundle,
   and has a list of complex heuristics to choose where to split, this
   allocator does conflict-based splitting, and tries to decide whether
   to split or evict and which split to take based on cost heuristics.
-  
+
 * The liverange computation is exact, whereas IonMonkey approximates
   using a single-pass algorithm that makes vregs live across entire
   loop bodies. We have found that precise liveness improves allocation
   performance and generated code quality, even though the liveness
   itself is slightly more expensive to compute.
-  
+
 * Many of the algorithms in the IonMonkey allocator are built with
   helper functions that do linear scans. These "small quadratic" loops
   are likely not a huge issue in practice, but nevertheless have the
   potential to be in corner cases. As much as possible, all work in
   this allocator is done in linear scans.
-  
+
 * There are novel schemes for solving certain interesting design
   challenges. One example: in IonMonkey, liveranges are connected
   across blocks by, when reaching one end of a control-flow edge in a
@@ -1255,7 +1040,7 @@ Several notable high-level differences are:
   for the core regalloc. Ion instead has to tweak its definition of
   minimal bundles and create two liveranges that overlap (!) to
   represent the two uses.
-  
+
 * Using block parameters rather than phi-nodes significantly
   simplifies handling of inter-block data movement. IonMonkey had to
   special-case phis in many ways because they are actually quite
@@ -1266,7 +1051,7 @@ Several notable high-level differences are:
 * The allocator supports irreducible control flow and arbitrary block
   ordering (its only CFG requirement is that critical edges are
   split).
-  
+
 * The allocator supports non-SSA code, and has native support for
   handling program moves specially.
 
@@ -1287,7 +1072,7 @@ number of general principles:
   an allocation map for each PReg. This turned out to be significantly
   (!) less efficient than Rust's built-in BTree data structures, for
   the usual cache-efficiency vs. pointer-chasing reasons.
-  
+
 * We initially used dense bitvecs, as IonMonkey does, for
   livein/liveout bits. It turned out that a chunked sparse design (see
   below) was much more efficient.
@@ -1311,7 +1096,7 @@ number of general principles:
   append liveranges to in-progress vreg liverange vectors and then
   reverse at the end. The expensive part is a single pass; only the
   bitset computation is a fixpoint loop.
-  
+
 * Sorts are better than always-sorted data structures (like btrees):
   they amortize all the comparison and update cost to one phase, and
   this phase is much more cache-friendly than a bunch of spread-out
