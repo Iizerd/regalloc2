@@ -653,7 +653,8 @@ pub fn machine_env() -> MachineEnv {
         regs(24..32, RegClass::RegClass7),
         regs(24..32, RegClass::RegClass8),
     ];
-    let scratch_by_class: [Option<PReg>; RegClass::MAX] = [None, None, None, None, None, None, None, None];
+    let scratch_by_class: [Option<PReg>; RegClass::MAX] =
+        [None, None, None, None, None, None, None, None];
     let fixed_stack_slots = (32..63)
         .flat_map(|i| {
             [

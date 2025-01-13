@@ -1,3 +1,4 @@
+use crate::moves::MoveVecWithScratch;
 use crate::moves::{MoveAndScratchResolver, ParallelMoves};
 use crate::{cfg::CFGInfo, ion::Stats, Allocation, RegAllocError};
 use crate::{ssa::validate_ssa, Edit, Function, MachineEnv, Output, ProgPoint};
@@ -5,12 +6,11 @@ use crate::{
     AllocationKind, Block, FxHashMap, Inst, InstPosition, Operand, OperandConstraint, OperandKind,
     OperandPos, PReg, PRegSet, RegClass, SpillSlot, VReg,
 };
-use crate::moves::MoveVecWithScratch;
 use alloc::vec::Vec;
-use smallvec::SmallVec;
 use core::convert::TryInto;
 use core::iter::FromIterator;
 use core::ops::{Index, IndexMut};
+use smallvec::SmallVec;
 
 mod iter;
 mod lru;
@@ -250,6 +250,11 @@ impl<'a, F: Function> Env<'a, F> {
             env.preferred_regs_by_class[RegClass::Int as usize].clone(),
             env.preferred_regs_by_class[RegClass::Float as usize].clone(),
             env.preferred_regs_by_class[RegClass::Vector as usize].clone(),
+            env.preferred_regs_by_class[RegClass::StackCopy as usize].clone(),
+            env.preferred_regs_by_class[RegClass::RegClass5 as usize].clone(),
+            env.preferred_regs_by_class[RegClass::RegClass6 as usize].clone(),
+            env.preferred_regs_by_class[RegClass::RegClass7 as usize].clone(),
+            env.preferred_regs_by_class[RegClass::RegClass8 as usize].clone(),
         ];
         regs[0].extend(
             env.non_preferred_regs_by_class[RegClass::Int as usize]
@@ -266,6 +271,31 @@ impl<'a, F: Function> Env<'a, F> {
                 .iter()
                 .cloned(),
         );
+        regs[3].extend(
+            env.non_preferred_regs_by_class[RegClass::StackCopy as usize]
+                .iter()
+                .cloned(),
+        );
+        regs[4].extend(
+            env.non_preferred_regs_by_class[RegClass::RegClass5 as usize]
+                .iter()
+                .cloned(),
+        );
+        regs[5].extend(
+            env.non_preferred_regs_by_class[RegClass::RegClass6 as usize]
+                .iter()
+                .cloned(),
+        );
+        regs[6].extend(
+            env.non_preferred_regs_by_class[RegClass::RegClass7 as usize]
+                .iter()
+                .cloned(),
+        );
+        regs[7].extend(
+            env.non_preferred_regs_by_class[RegClass::RegClass8 as usize]
+                .iter()
+                .cloned(),
+        );
         let allocatable_regs = PRegSet::from(env);
         let init_available_pregs = {
             let mut regs = allocatable_regs;
@@ -279,6 +309,11 @@ impl<'a, F: Function> Env<'a, F> {
                 env.scratch_by_class[0],
                 env.scratch_by_class[1],
                 env.scratch_by_class[2],
+                env.scratch_by_class[3],
+                env.scratch_by_class[4],
+                env.scratch_by_class[5],
+                env.scratch_by_class[6],
+                env.scratch_by_class[7],
             ],
         };
         trace!("{:?}", env);
@@ -290,7 +325,9 @@ impl<'a, F: Function> Env<'a, F> {
             vreg_allocs: vec![Allocation::none(); func.num_vregs()],
             vreg_spillslots: vec![SpillSlot::invalid(); func.num_vregs()],
             live_vregs: VRegSet::with_capacity(func.num_vregs()),
-            lrus: Lrus::new(&regs[0], &regs[1], &regs[2]),
+            lrus: Lrus::new(
+                &regs[0], &regs[1], &regs[2], &regs[3], &regs[4], &regs[5], &regs[6], &regs[7],
+            ),
             vreg_in_preg: vec![VReg::invalid(); PReg::NUM_INDEX],
             stack: Stack::new(func),
             fixed_stack_slots,
@@ -307,6 +344,11 @@ impl<'a, F: Function> Env<'a, F> {
                     regs[0].last().cloned().unwrap_or(PReg::invalid()),
                     regs[1].last().cloned().unwrap_or(PReg::invalid()),
                     regs[2].last().cloned().unwrap_or(PReg::invalid()),
+                    regs[3].last().cloned().unwrap_or(PReg::invalid()),
+                    regs[4].last().cloned().unwrap_or(PReg::invalid()),
+                    regs[5].last().cloned().unwrap_or(PReg::invalid()),
+                    regs[6].last().cloned().unwrap_or(PReg::invalid()),
+                    regs[7].last().cloned().unwrap_or(PReg::invalid()),
                 ],
             },
             reused_input_to_reuse_op: vec![usize::MAX; max_operand_len as usize],
@@ -735,16 +777,15 @@ impl<'a, F: Function> Env<'a, F> {
         trace!("Processing branch instruction {inst:?} in block {block:?}");
 
         let mut all_parallel_moves: [ParallelMoves<Option<VReg>>; RegClass::MAX] = [
-                ParallelMoves::new(),
-                ParallelMoves::new(),
-                ParallelMoves::new(),
-                ParallelMoves::new(),
-                ParallelMoves::new(),
-                ParallelMoves::new(),
-                ParallelMoves::new(),
-                ParallelMoves::new(),
-            ];
-
+            ParallelMoves::new(),
+            ParallelMoves::new(),
+            ParallelMoves::new(),
+            ParallelMoves::new(),
+            ParallelMoves::new(),
+            ParallelMoves::new(),
+            ParallelMoves::new(),
+            ParallelMoves::new(),
+        ];
 
         for (succ_idx, succ) in self.func.block_succs(block).iter().enumerate() {
             for (pos, vreg) in self
@@ -796,8 +837,8 @@ impl<'a, F: Function> Env<'a, F> {
             }
         }
 
-
-        let mut all_resolved_parallel_moves = SmallVec::<[MoveVecWithScratch<Option<VReg>>; RegClass::MAX]>::new();
+        let mut all_resolved_parallel_moves =
+            SmallVec::<[MoveVecWithScratch<Option<VReg>>; RegClass::MAX]>::new();
         for parallel_moves in all_parallel_moves {
             all_resolved_parallel_moves.push(parallel_moves.resolve());
         }
@@ -808,7 +849,6 @@ impl<'a, F: Function> Env<'a, F> {
 
         trace!("Resolving parallel moves");
         for (class, resolved) in all_resolved_parallel_moves.into_iter().enumerate() {
-
             let class = RegClass::from_index(class);
 
             let scratch_resolver = MoveAndScratchResolver {

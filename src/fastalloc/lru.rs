@@ -269,7 +269,7 @@ impl fmt::Debug for Lru {
 
 #[derive(Clone)]
 pub struct PartedByRegClass<T> {
-    pub items: [T; 3],
+    pub items: [T; RegClass::MAX],
 }
 
 impl<T> Index<RegClass> for PartedByRegClass<T> {
@@ -290,12 +290,26 @@ impl<T> IndexMut<RegClass> for PartedByRegClass<T> {
 pub type Lrus = PartedByRegClass<Lru>;
 
 impl Lrus {
-    pub fn new(int_regs: &[PReg], float_regs: &[PReg], vec_regs: &[PReg]) -> Self {
+    pub fn new(
+        int_regs: &[PReg],
+        float_regs: &[PReg],
+        vec_regs: &[PReg],
+        sc_regs: &[PReg],
+        rc5_regs: &[PReg],
+        rc6_regs: &[PReg],
+        rc7_regs: &[PReg],
+        rc8_regs: &[PReg],
+    ) -> Self {
         Self {
             items: [
                 Lru::new(RegClass::Int, int_regs),
                 Lru::new(RegClass::Float, float_regs),
                 Lru::new(RegClass::Vector, vec_regs),
+                Lru::new(RegClass::StackCopy, sc_regs),
+                Lru::new(RegClass::RegClass5, rc5_regs),
+                Lru::new(RegClass::RegClass6, rc6_regs),
+                Lru::new(RegClass::RegClass7, rc7_regs),
+                Lru::new(RegClass::RegClass8, rc8_regs),
             ],
         }
     }

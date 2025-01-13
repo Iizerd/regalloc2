@@ -119,16 +119,20 @@ impl RegClass {
 }
 impl Display for RegClass {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", match self {
-            RegClass::Int => "i",
-            RegClass::Float => "f",
-            RegClass::Vector => "v",
-            RegClass::StackCopy => "sc",
-            RegClass::RegClass5 => "rc5",
-            RegClass::RegClass6 => "rc6",
-            RegClass::RegClass7 => "rc7",
-            RegClass::RegClass8 => "rc8",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                RegClass::Int => "i",
+                RegClass::Float => "f",
+                RegClass::Vector => "v",
+                RegClass::StackCopy => "sc",
+                RegClass::RegClass5 => "rc5",
+                RegClass::RegClass6 => "rc6",
+                RegClass::RegClass7 => "rc7",
+                RegClass::RegClass8 => "rc8",
+            }
+        )
     }
 }
 
@@ -202,7 +206,7 @@ impl PReg {
     #[inline(always)]
     pub const fn from_index(index: usize) -> Self {
         PReg {
-            bits: (index & (Self::NUM_INDEX - 1)) as u16 & Self::USED_BITS_MASK,
+            bits: (index & (Self::NUM_INDEX - 1)) as u16,
         }
     }
 
@@ -932,12 +936,16 @@ impl Operand {
     /// Get the register class used by this operand.
     #[inline(always)]
     pub fn class(self) -> RegClass {
-        let class_field = (self.bits >> 21) & 3;
+        let class_field = (self.bits >> 20) & RegClass::BITS_MASK as u32;
         match class_field {
             0 => RegClass::Int,
             1 => RegClass::Float,
             2 => RegClass::Vector,
             3 => RegClass::StackCopy,
+            4 => RegClass::RegClass5,
+            5 => RegClass::RegClass6,
+            6 => RegClass::RegClass7,
+            7 => RegClass::RegClass8,
             _ => unreachable!(),
         }
     }

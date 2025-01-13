@@ -154,7 +154,16 @@ fn mach_env(no_of_regs: usize) -> MachineEnv {
             vec![],
             vec![],
         ],
-        non_preferred_regs_by_class: [vec![], vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
+        non_preferred_regs_by_class: [
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ],
         scratch_by_class: [None, None, None, None, None, None, None, None],
         fixed_stack_slots: vec![],
     }
