@@ -1071,7 +1071,7 @@ impl<'a, F: Function> Env<'a, F> {
             let fixed_preg = match req {
                 Requirement::FixedReg(preg) | Requirement::FixedStack(preg) => Some(preg),
                 Requirement::Register => None,
-
+                Requirement::Group(..) => None,
                 Requirement::Any => {
                     self.ctx.spilled_bundles.push(bundle);
                     break;
@@ -1105,7 +1105,7 @@ impl<'a, F: Function> Env<'a, F> {
                 hint_reg,
                 PReg::invalid(),
                 scan_offset,
-                fixed_preg,
+                Some(req),
             ) {
                 self.ctx.output.stats.process_bundle_reg_probes_any += 1;
                 let preg_idx = PRegIndex::new(preg.index());

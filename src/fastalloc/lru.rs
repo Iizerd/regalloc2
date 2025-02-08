@@ -306,7 +306,7 @@ impl Lrus {
                 Lru::new(RegClass::Float, float_regs),
                 Lru::new(RegClass::Vector, vec_regs),
                 Lru::new(RegClass::StackCopy, sc_regs),
-                Lru::new(RegClass::RegClass5, rc5_regs),
+                Lru::new(RegClass::Flag, rc5_regs),
                 Lru::new(RegClass::RegClass6, rc6_regs),
                 Lru::new(RegClass::RegClass7, rc7_regs),
                 Lru::new(RegClass::RegClass8, rc8_regs),

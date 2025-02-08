@@ -13,7 +13,7 @@
 //! Requirements computation.
 
 use super::{Env, LiveBundleIndex};
-use crate::{Function, Inst, Operand, OperandConstraint, PReg, ProgPoint};
+use crate::{Function, Inst, MachineEnv, Operand, OperandConstraint, PReg, ProgPoint, RegClass};
 
 pub struct RequirementConflict;
 
@@ -60,12 +60,17 @@ impl RequirementConflictAt {
 pub enum Requirement {
     FixedReg(PReg),
     FixedStack(PReg),
+    Group(RegClass, u16),
     Register,
     Any,
 }
 impl Requirement {
     #[inline(always)]
-    pub fn merge(self, other: Requirement) -> Result<Requirement, RequirementConflict> {
+    pub fn merge(
+        self,
+        other: Requirement,
+        env: &MachineEnv,
+    ) -> Result<Requirement, RequirementConflict> {
         match (self, other) {
             (other, Requirement::Any) | (Requirement::Any, other) => Ok(other),
             (Requirement::Register, Requirement::Register) => Ok(self),
@@ -75,6 +80,25 @@ impl Requirement {
             }
             (Requirement::FixedReg(a), Requirement::FixedReg(b)) if a == b => Ok(self),
             (Requirement::FixedStack(a), Requirement::FixedStack(b)) if a == b => Ok(self),
+            (Requirement::Group(classa, a), Requirement::Group(classb, b))
+                if classa == classb && a == b =>
+            {
+                Ok(self)
+            }
+            (Requirement::Group(class, index), Requirement::FixedReg(preg))
+            | (Requirement::FixedReg(preg), Requirement::Group(class, index)) => {
+                // PReg must be of same class.
+                if class != preg.class() {
+                    return Err(RequirementConflict);
+                }
+                // Can merge a group and a fixed reg if the group contains the fixed reg.
+                let group = &env.groups[class.index()][index as usize];
+                if group.contains(&preg) {
+                    Ok(Requirement::FixedReg(preg))
+                } else {
+                    Err(RequirementConflict)
+                }
+            }
             _ => Err(RequirementConflict),
         }
     }
@@ -83,7 +107,7 @@ impl Requirement {
     pub fn is_stack(self) -> bool {
         match self {
             Requirement::FixedStack(..) => true,
-            Requirement::Register | Requirement::FixedReg(..) => false,
+            Requirement::Register | Requirement::FixedReg(..) | Requirement::Group(..) => false,
             Requirement::Any => false,
         }
     }
@@ -91,7 +115,7 @@ impl Requirement {
     #[inline(always)]
     pub fn is_reg(self) -> bool {
         match self {
-            Requirement::Register | Requirement::FixedReg(..) => true,
+            Requirement::Register | Requirement::FixedReg(..) | Requirement::Group(..) => true,
             Requirement::FixedStack(..) => false,
             Requirement::Any => false,
         }
@@ -109,6 +133,7 @@ impl<'a, F: Function> Env<'a, F> {
                     Requirement::FixedReg(preg)
                 }
             }
+            OperandConstraint::Group(g) => Requirement::Group(op.class(), g as u16),
             OperandConstraint::Reg | OperandConstraint::Reuse(_) => Requirement::Register,
             OperandConstraint::Any => Requirement::Any,
         }
@@ -127,7 +152,7 @@ impl<'a, F: Function> Env<'a, F> {
             for u in &self.ranges[entry.index].uses {
                 trace!("  -> use {:?}", u);
                 let r = self.requirement_from_operand(u.operand);
-                req = req.merge(r).map_err(|_| {
+                req = req.merge(r, &self.env).map_err(|_| {
                     trace!("     -> conflict");
                     if req.is_stack() && r.is_reg() {
                         // Suggested split point just before the reg (i.e., late split).
@@ -162,6 +187,6 @@ impl<'a, F: Function> Env<'a, F> {
         let req_b = self
             .compute_requirement(b)
             .map_err(|_| RequirementConflict)?;
-        req_a.merge(req_b)
+        req_a.merge(req_b, &self.env)
     }
 }

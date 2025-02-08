@@ -127,7 +127,7 @@ impl Function for Func {
             RegClass::Float => 1,
             RegClass::Vector => 2,
             RegClass::StackCopy => 1,
-            RegClass::RegClass5 => 4,
+            RegClass::Flag => 4,
             RegClass::RegClass6 => 8,
             RegClass::RegClass7 => 16,
             RegClass::RegClass8 => 32,
@@ -269,6 +269,7 @@ pub struct Options {
     pub fixed_nonallocatable: bool,
     pub clobbers: bool,
     pub reftypes: bool,
+    pub groups: bool,
 }
 
 impl core::default::Default for Options {
@@ -279,6 +280,7 @@ impl core::default::Default for Options {
             fixed_nonallocatable: false,
             clobbers: false,
             reftypes: false,
+            groups: false,
         }
     }
 }
@@ -514,6 +516,15 @@ impl Func {
                         63,
                         RegClass::arbitrary(u)?,
                     )));
+                } else if opts.groups && bool::arbitrary(u)? {
+                    for op in &mut operands {
+                        *op = Operand::new(
+                            op.vreg(),
+                            OperandConstraint::Group(usize::arbitrary(u)? % 16),
+                            op.kind(),
+                            op.pos(),
+                        );
+                    }
                 }
 
                 builder.add_inst(
@@ -629,7 +640,7 @@ impl core::fmt::Debug for Func {
     }
 }
 
-pub fn machine_env() -> MachineEnv {
+pub fn machine_env(u: &mut Unstructured) -> MachineEnv {
     fn regs(r: core::ops::Range<usize>, c: RegClass) -> Vec<PReg> {
         r.map(|i| PReg::new(i, c)).collect()
     }
@@ -638,7 +649,7 @@ pub fn machine_env() -> MachineEnv {
         regs(0..24, RegClass::Float),
         regs(0..24, RegClass::Vector),
         regs(0..24, RegClass::StackCopy),
-        regs(0..24, RegClass::RegClass5),
+        regs(0..24, RegClass::Flag),
         regs(0..24, RegClass::RegClass6),
         regs(0..24, RegClass::RegClass7),
         regs(0..24, RegClass::RegClass8),
@@ -648,7 +659,7 @@ pub fn machine_env() -> MachineEnv {
         regs(24..32, RegClass::Float),
         regs(24..32, RegClass::Vector),
         regs(24..32, RegClass::StackCopy),
-        regs(24..32, RegClass::RegClass5),
+        regs(24..32, RegClass::Flag),
         regs(24..32, RegClass::RegClass6),
         regs(24..32, RegClass::RegClass7),
         regs(24..32, RegClass::RegClass8),
@@ -662,18 +673,49 @@ pub fn machine_env() -> MachineEnv {
                 PReg::new(i, RegClass::Float),
                 PReg::new(i, RegClass::Vector),
                 PReg::new(i, RegClass::StackCopy),
-                PReg::new(i, RegClass::RegClass5),
+                PReg::new(i, RegClass::Flag),
                 PReg::new(i, RegClass::RegClass6),
                 PReg::new(i, RegClass::RegClass7),
                 PReg::new(i, RegClass::RegClass8),
             ]
         })
         .collect();
+
+    fn make_group(u: &mut Unstructured, class: RegClass) -> Vec<PReg> {
+        let mut group: Vec<PReg> = (0..32)
+            .into_iter()
+            .filter_map(|i| {
+                if bool::arbitrary(u).unwrap() {
+                    Some(PReg::new(i, RegClass::Int))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if group.is_empty() {
+            group.push(PReg::new(usize::arbitrary(u).unwrap() % 32, class))
+        }
+
+        group
+    }
+
+    let groups: [[Vec<PReg>; 16]; RegClass::MAX] = [
+        std::array::from_fn(|_| make_group(u, RegClass::Int)),
+        std::array::from_fn(|_| make_group(u, RegClass::Float)),
+        std::array::from_fn(|_| make_group(u, RegClass::Vector)),
+        std::array::from_fn(|_| make_group(u, RegClass::StackCopy)),
+        std::array::from_fn(|_| make_group(u, RegClass::Flag)),
+        std::array::from_fn(|_| make_group(u, RegClass::RegClass6)),
+        std::array::from_fn(|_| make_group(u, RegClass::RegClass7)),
+        std::array::from_fn(|_| make_group(u, RegClass::RegClass8)),
+    ];
     // Register 63 is reserved for use as a fixed non-allocatable register.
     MachineEnv {
         preferred_regs_by_class,
         non_preferred_regs_by_class,
         scratch_by_class,
         fixed_stack_slots,
+        groups,
     }
 }

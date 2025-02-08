@@ -1,4 +1,4 @@
-use crate::{MachineEnv, PReg, RegClass};
+use crate::{ion::Requirement, MachineEnv, PReg, RegClass};
 
 /// This iterator represents a traversal through all allocatable
 /// registers of a given class, in a certain order designed to
@@ -25,6 +25,7 @@ pub struct RegTraversalIter<'a> {
     offset_non_pref: usize,
     is_fixed: bool,
     fixed: Option<PReg>,
+    group: Option<(RegClass, u16, usize)>,
 }
 
 impl<'a> RegTraversalIter<'a> {
@@ -34,7 +35,9 @@ impl<'a> RegTraversalIter<'a> {
         hint_reg: PReg,
         hint2_reg: PReg,
         offset: usize,
-        fixed: Option<PReg>,
+        req: Option<Requirement>,
+        //fixed: Option<PReg>,
+        //group: Option<(RegClass, u16)>,
     ) -> Self {
         let mut hint_reg = if hint_reg != PReg::invalid() {
             Some(hint_reg)
@@ -63,6 +66,18 @@ impl<'a> RegTraversalIter<'a> {
         } else {
             0
         };
+
+        let (fixed, group) = if let Some(req) = req {
+            match req {
+                Requirement::FixedReg(preg) | Requirement::FixedStack(preg) => (Some(preg), None),
+                Requirement::Register => (None, None),
+                Requirement::Group(class, index) => (None, Some((class, index, 0))),
+                Requirement::Any => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+
         Self {
             env,
             class,
@@ -74,6 +89,7 @@ impl<'a> RegTraversalIter<'a> {
             offset_non_pref,
             is_fixed: fixed.is_some(),
             fixed,
+            group,
         }
     }
 }
@@ -86,6 +102,15 @@ impl<'a> core::iter::Iterator for RegTraversalIter<'a> {
             let ret = self.fixed;
             self.fixed = None;
             return ret;
+        } else if let Some((class, index, offset)) = &mut self.group {
+            let arr = &self.env.groups[class.index()][*index as usize];
+            //
+            if *offset >= arr.len() {
+                return None;
+            }
+            let r = arr[*offset];
+            *offset += 1;
+            return Some(r);
         }
 
         fn wrap(idx: usize, limit: usize) -> usize {

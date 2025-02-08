@@ -251,7 +251,7 @@ impl<'a, F: Function> Env<'a, F> {
             env.preferred_regs_by_class[RegClass::Float as usize].clone(),
             env.preferred_regs_by_class[RegClass::Vector as usize].clone(),
             env.preferred_regs_by_class[RegClass::StackCopy as usize].clone(),
-            env.preferred_regs_by_class[RegClass::RegClass5 as usize].clone(),
+            env.preferred_regs_by_class[RegClass::Flag as usize].clone(),
             env.preferred_regs_by_class[RegClass::RegClass6 as usize].clone(),
             env.preferred_regs_by_class[RegClass::RegClass7 as usize].clone(),
             env.preferred_regs_by_class[RegClass::RegClass8 as usize].clone(),
@@ -277,7 +277,7 @@ impl<'a, F: Function> Env<'a, F> {
                 .cloned(),
         );
         regs[4].extend(
-            env.non_preferred_regs_by_class[RegClass::RegClass5 as usize]
+            env.non_preferred_regs_by_class[RegClass::Flag as usize]
                 .iter()
                 .cloned(),
         );
@@ -496,6 +496,9 @@ impl<'a, F: Function> Env<'a, F> {
                     false
                 }
             }
+            OperandConstraint::Group(index) => {
+                unimplemented!("I don't want to write this.");
+            }
             // It is possible for an operand to have a fixed register constraint to
             // a clobber.
             OperandConstraint::FixedReg(preg) => alloc.is_reg() && alloc.as_reg().unwrap() == preg,
@@ -623,6 +626,10 @@ impl<'a, F: Function> Env<'a, F> {
                 trace!("The fixed preg: {} for operand {}", preg, op);
 
                 Allocation::reg(preg)
+            }
+            OperandConstraint::Group(_) => {
+                // This is handled elsewhere.
+                unimplemented!("I don't want to implement this.");
             }
             OperandConstraint::Reuse(_) => {
                 // This is handled elsewhere.

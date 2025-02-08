@@ -91,7 +91,7 @@ pub enum RegClass {
     Float = 1,
     Vector = 2,
     StackCopy = 3,
-    RegClass5 = 4,
+    Flag = 4,
     RegClass6 = 5,
     RegClass7 = 6,
     RegClass8 = 7,
@@ -109,7 +109,7 @@ impl RegClass {
             1 => RegClass::Float,
             2 => RegClass::Vector,
             3 => RegClass::StackCopy,
-            4 => RegClass::RegClass5,
+            4 => RegClass::Flag,
             5 => RegClass::RegClass6,
             6 => RegClass::RegClass7,
             7 => RegClass::RegClass8,
@@ -127,7 +127,7 @@ impl Display for RegClass {
                 RegClass::Float => "f",
                 RegClass::Vector => "v",
                 RegClass::StackCopy => "sc",
-                RegClass::RegClass5 => "rc5",
+                RegClass::Flag => "rc5",
                 RegClass::RegClass6 => "rc6",
                 RegClass::RegClass7 => "rc7",
                 RegClass::RegClass8 => "rc8",
@@ -186,7 +186,7 @@ impl PReg {
             1 => RegClass::Float,
             2 => RegClass::Vector,
             3 => RegClass::StackCopy,
-            4 => RegClass::RegClass5,
+            4 => RegClass::Flag,
             5 => RegClass::RegClass6,
             6 => RegClass::RegClass7,
             7 => RegClass::RegClass8,
@@ -473,7 +473,7 @@ impl VReg {
             1 => RegClass::Float,
             2 => RegClass::Vector,
             3 => RegClass::StackCopy,
-            4 => RegClass::RegClass5,
+            4 => RegClass::Flag,
             5 => RegClass::RegClass6,
             6 => RegClass::RegClass7,
             7 => RegClass::RegClass8,
@@ -596,6 +596,9 @@ pub enum OperandConstraint {
     FixedReg(PReg),
     /// On defs only: reuse a use's register.
     Reuse(usize),
+    /// Can select from a group of PRegs in th class.
+    /// There are only 2^4 groups possible for each reg class.
+    Group(usize),
 }
 
 impl core::fmt::Display for OperandConstraint {
@@ -605,6 +608,7 @@ impl core::fmt::Display for OperandConstraint {
             Self::Reg => write!(f, "reg"),
             Self::FixedReg(preg) => write!(f, "fixed({})", preg),
             Self::Reuse(idx) => write!(f, "reuse({})", idx),
+            Self::Group(idx) => write!(f, "group({})", idx),
         }
     }
 }
@@ -679,6 +683,7 @@ pub struct Operand {
     /// The constraints are encoded as follows:
     /// - 1xxxxxx => FixedReg(preg)
     /// - 01xxxxx => Reuse(index)
+    /// - 001xxxx => Group(index)
     /// - 0000000 => Any
     /// - 0000001 => Reg
     /// - 0000010 => Stack
@@ -705,6 +710,10 @@ impl Operand {
             OperandConstraint::Reuse(which) => {
                 debug_assert!(which <= 31);
                 0b0100000 | which as u32
+            }
+            OperandConstraint::Group(which) => {
+                debug_assert!(which <= 15);
+                0b0010000 | which as u32
             }
         };
         let class_field = vreg.class() as u8 as u32;
@@ -942,7 +951,7 @@ impl Operand {
             1 => RegClass::Float,
             2 => RegClass::Vector,
             3 => RegClass::StackCopy,
-            4 => RegClass::RegClass5,
+            4 => RegClass::Flag,
             5 => RegClass::RegClass6,
             6 => RegClass::RegClass7,
             7 => RegClass::RegClass8,
@@ -985,6 +994,8 @@ impl Operand {
             OperandConstraint::FixedReg(PReg::new(constraint_field & 0b0111111, self.class()))
         } else if constraint_field & 0b0100000 != 0 {
             OperandConstraint::Reuse(constraint_field & 0b0011111)
+        } else if constraint_field & 0b0010000 != 0 {
+            OperandConstraint::Group(constraint_field & 0b0001111)
         } else {
             match constraint_field {
                 0 => OperandConstraint::Any,
@@ -1048,7 +1059,7 @@ impl core::fmt::Display for Operand {
                 RegClass::Float => "f",
                 RegClass::Vector => "v",
                 RegClass::StackCopy => "sc",
-                RegClass::RegClass5 => "rc5",
+                RegClass::Flag => "rc5",
                 RegClass::RegClass6 => "rc6",
                 RegClass::RegClass7 => "rc7",
                 RegClass::RegClass8 => "rc8",
@@ -1565,6 +1576,10 @@ pub struct MachineEnv {
     /// `PReg`s in this list cannot be used as an allocatable or scratch
     /// register.
     pub fixed_stack_slots: Vec<PReg>,
+
+    /// Groups available for each register. These cannot be stack slots which are
+    /// the registers in the above vector...
+    pub groups: [[Vec<PReg>; 16]; RegClass::MAX],
 }
 
 /// The output of the register allocator.

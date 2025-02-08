@@ -146,6 +146,11 @@ pub enum CheckerError {
         op: Operand,
         alloc: Allocation,
     },
+    AllocationIsNotInGroup {
+        inst: Inst,
+        op: Operand,
+        alloc: Allocation,
+    },
     AllocationIsNotFixedReg {
         inst: Inst,
         op: Operand,
@@ -636,6 +641,22 @@ impl CheckerState {
                     // Reject pregs that represent a fixed stack slot.
                     if !checker.machine_env.fixed_stack_slots.contains(&preg) {
                         return Ok(());
+                    }
+                }
+                return Err(CheckerError::AllocationIsNotReg { inst, op, alloc });
+            }
+            OperandConstraint::Group(index) => {
+                if let Some(preg) = alloc.as_reg() {
+                    // Reject pregs that represent a fixed stack slot.
+                    if checker.machine_env.fixed_stack_slots.contains(&preg) {
+                        return Err(CheckerError::AllocationIsNotReg { inst, op, alloc });
+                    }
+                    let group = &checker.machine_env.groups[op.class().index()][index as usize];
+                    // Reject pregs not in the group.
+                    if group.contains(&preg) {
+                        return Ok(());
+                    } else {
+                        return Err(CheckerError::AllocationIsNotInGroup { inst, op, alloc });
                     }
                 }
                 return Err(CheckerError::AllocationIsNotReg { inst, op, alloc });

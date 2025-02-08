@@ -321,7 +321,7 @@ impl Function for RealFunction {
             RegClass::Float => 4,
             RegClass::Vector => 8,
             RegClass::StackCopy => 16,
-            RegClass::RegClass5 => 32,
+            RegClass::Flag => 32,
             RegClass::RegClass6 => 64,
             RegClass::RegClass7 => 128,
             RegClass::RegClass8 => 512,

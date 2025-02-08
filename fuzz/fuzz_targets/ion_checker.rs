@@ -8,10 +8,12 @@ use regalloc2::fuzzing::arbitrary::{Arbitrary, Result, Unstructured};
 use regalloc2::fuzzing::checker::Checker;
 use regalloc2::fuzzing::func::{Func, Options};
 use regalloc2::fuzzing::fuzz_target;
+use regalloc2::MachineEnv;
 
 #[derive(Clone, Debug)]
 struct TestCase {
     func: Func,
+    machine_env: MachineEnv,
 }
 
 impl Arbitrary<'_> for TestCase {
@@ -25,17 +27,19 @@ impl Arbitrary<'_> for TestCase {
                     fixed_nonallocatable: true,
                     clobbers: true,
                     reftypes: true,
+                    groups: true,
                 },
             )?,
+            machine_env: regalloc2::fuzzing::func::machine_env(u),
         })
     }
 }
 
 fuzz_target!(|testcase: TestCase| {
     let func = testcase.func;
+    let env = testcase.machine_env;
     let _ = env_logger::try_init();
     log::trace!("func:\n{:?}", func);
-    let env = regalloc2::fuzzing::func::machine_env();
 
     thread_local! {
         // We test that ctx is cleared properly between runs.
