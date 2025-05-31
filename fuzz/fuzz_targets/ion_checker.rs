@@ -28,6 +28,7 @@ impl Arbitrary<'_> for TestCase {
                     clobbers: true,
                     reftypes: true,
                     groups: true,
+                    callsite_ish_constraints: true,
                 },
             )?,
             machine_env: regalloc2::fuzzing::func::machine_env(u),

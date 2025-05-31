@@ -1006,7 +1006,7 @@ impl Operand {
     }
 
     /// If this operand is for a fixed non-allocatable register (see
-    /// [`Operand::fixed`]), then returns the physical register that it will
+    /// [`Operand::fixed_nonallocatable`]), then returns the physical register that it will
     /// be assigned to.
     #[inline(always)]
     pub fn as_fixed_nonallocatable(self) -> Option<PReg> {
@@ -1219,6 +1219,9 @@ pub enum AllocationKind {
 ///
 /// (This trait's design is inspired by, and derives heavily from, the
 /// trait of the same name in regalloc.rs.)
+///
+/// The ids used in [`Block`] and [`VReg`] must start their numbering
+/// at zero and be sequential.
 pub trait Function {
     // -------------
     // CFG traversal
@@ -1289,12 +1292,11 @@ pub trait Function {
     /// used as a vreg output, or fixed physical registers used as
     /// temps within an instruction out of necessity.
     ///
-    /// Note that it is legal for a register to be both a clobber and
-    /// an actual def (via pinned vreg or via operand constrained to
-    /// the reg). This is for convenience: e.g., a call instruction
-    /// might have a constant clobber set determined by the ABI, but
-    /// some of those clobbered registers are sometimes return
-    /// value(s).
+    /// Note that clobbers and defs and late-uses must not collide: it
+    /// is illegal to name the same physical register both as a clobber
+    /// and in a fixed-register constraint on a def or late use.
+    /// Internally, clobbers are modeled as defs (of throwaway vregs) at
+    /// the instruction's late-point constrained to the named register.
     fn inst_clobbers(&self, insn: Inst) -> PRegSet;
 
     /// Get the number of `VReg` in use in this function.
@@ -1660,10 +1662,12 @@ pub enum RegAllocError {
     /// a block param.
     SSA(VReg, Inst),
     /// Invalid basic block: does not end in branch/ret, or contains a
-    /// branch/ret in the middle.
+    /// branch/ret in the middle, or the VReg ids do not start at zero
+    /// or aren't numbered sequentially.
     BB(Block),
     /// Invalid branch: operand count does not match sum of block
-    /// params of successor blocks.
+    /// params of successor blocks, or the block ids do not start at
+    /// zero or aren't numbered sequentially.
     Branch(Inst),
     /// A VReg is live-in on entry; this is not allowed.
     EntryLivein,
@@ -1676,6 +1680,9 @@ pub enum RegAllocError {
     /// Too many pinned VRegs + Reg-constrained Operands are live at
     /// once, making allocation impossible.
     TooManyLiveRegs,
+    /// Too many operands on a single instruction (beyond limit of
+    /// 2^16 - 1).
+    TooManyOperands,
 }
 
 impl core::fmt::Display for RegAllocError {

@@ -83,7 +83,7 @@ impl<'a, F: Function> Env<'a, F> {
     pub(crate) fn init(&mut self) -> Result<(), RegAllocError> {
         self.create_pregs_and_vregs();
         self.compute_liveness()?;
-        self.build_liveranges();
+        self.build_liveranges()?;
         self.fixup_multi_fixed_vregs();
         self.merge_vreg_bundles();
         self.queue_bundles();
@@ -97,6 +97,9 @@ impl<'a, F: Function> Env<'a, F> {
         self.process_bundles()?;
         self.try_allocating_regs_for_spilled_bundles();
         self.allocate_spillslots();
+        if trace_enabled!() {
+            self.dump_state();
+        }
         let moves = self.apply_allocations_and_insert_moves();
         Ok(self.resolve_inserted_moves(moves))
     }
