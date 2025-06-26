@@ -437,8 +437,8 @@ pub struct VReg {
 }
 
 impl VReg {
-    pub const MAX_BITS: usize = 20;
-    pub const MAX: usize = (1 << Self::MAX_BITS) - 1;
+    pub const VREG_BITS: usize = 32 - RegClass::BITS;
+    pub const MAX: usize = (1 << Self::VREG_BITS) - 1;
 
     #[inline(always)]
     pub const fn new(virt_reg: usize, class: RegClass) -> Self {
@@ -672,9 +672,9 @@ pub enum OperandPos {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct Operand {
-    /// Bit-pack into 32 bits.
+    /// Bit-pack into 64 bits.
     ///
-    /// constraint:7 kind:1 pos:1 class:3 vreg:20
+    /// constraint:7 kind:1 pos:1 class:3 vreg:32
     ///
     /// where `constraint` is an `OperandConstraint`, `kind` is an
     /// `OperandKind`, `pos` is an `OperandPos`, `class` is a
@@ -688,7 +688,7 @@ pub struct Operand {
     /// - 0000001 => Reg
     /// - 0000010 => Stack
     /// - _ => Unused for now
-    bits: u32,
+    bits: u64,
 }
 
 impl Operand {
@@ -705,26 +705,26 @@ impl Operand {
             OperandConstraint::Reg => 1,
             OperandConstraint::FixedReg(preg) => {
                 debug_assert_eq!(preg.class(), vreg.class());
-                0b1000000 | preg.hw_enc() as u32
+                0b1000000 | preg.hw_enc() as u64
             }
             OperandConstraint::Reuse(which) => {
                 debug_assert!(which <= 31);
-                0b0100000 | which as u32
+                0b0100000 | which as u64
             }
             OperandConstraint::Group(which) => {
                 debug_assert!(which <= 15);
-                0b0010000 | which as u32
+                0b0010000 | which as u64
             }
         };
-        let class_field = vreg.class() as u8 as u32;
-        let pos_field = pos as u8 as u32;
-        let kind_field = kind as u8 as u32;
+        let class_field = vreg.class() as u8 as u64;
+        let pos_field = pos as u8 as u64;
+        let kind_field = kind as u8 as u64;
         Operand {
-            bits: vreg.vreg() as u32
-                | (class_field << 20)
-                | (pos_field << 23)
-                | (kind_field << 24)
-                | (constraint_field << 25),
+            bits: vreg.vreg() as u64
+                | (class_field << VReg::VREG_BITS)
+                | (pos_field << (VReg::VREG_BITS + 3))
+                | (kind_field << (VReg::VREG_BITS + 4))
+                | (constraint_field << (VReg::VREG_BITS + 5)),
         }
     }
 
@@ -932,20 +932,20 @@ impl Operand {
     /// Operand
     #[inline(always)]
     pub fn vreg_raw(self) -> u32 {
-        self.bits & VReg::MAX as u32
+        (self.bits & VReg::MAX as u64) as u32
     }
 
     /// Rename the [`VReg`] associated with this operand by modifying
     /// the 32bit encoding directly.
     #[inline(always)]
     pub fn set_vreg_raw(&mut self, new_name: u32) {
-        self.bits = (self.bits & (!(VReg::MAX as u32))) | new_name
+        self.bits = (self.bits & (!(VReg::MAX as u64))) | new_name as u64
     }
 
     /// Get the register class used by this operand.
     #[inline(always)]
     pub fn class(self) -> RegClass {
-        let class_field = (self.bits >> 20) & RegClass::BITS_MASK as u32;
+        let class_field = (self.bits >> VReg::VREG_BITS) & RegClass::BITS_MASK as u64;
         match class_field {
             0 => RegClass::Int,
             1 => RegClass::Float,
@@ -963,7 +963,7 @@ impl Operand {
     /// (read).
     #[inline(always)]
     pub fn kind(self) -> OperandKind {
-        let kind_field = (self.bits >> 24) & 1;
+        let kind_field = (self.bits >> (VReg::VREG_BITS + 4)) & 1;
         match kind_field {
             0 => OperandKind::Def,
             1 => OperandKind::Use,
@@ -977,7 +977,7 @@ impl Operand {
     /// at "after", though there are cases where this is not true.
     #[inline(always)]
     pub fn pos(self) -> OperandPos {
-        let pos_field = (self.bits >> 23) & 1;
+        let pos_field = (self.bits >> (VReg::VREG_BITS + 3)) & 1;
         match pos_field {
             0 => OperandPos::Early,
             1 => OperandPos::Late,
@@ -989,7 +989,7 @@ impl Operand {
     /// its allocation must fulfill.
     #[inline(always)]
     pub fn constraint(self) -> OperandConstraint {
-        let constraint_field = ((self.bits >> 25) as usize) & 127;
+        let constraint_field = ((self.bits >> (VReg::VREG_BITS + 5)) as usize) & 127;
         if constraint_field & 0b1000000 != 0 {
             OperandConstraint::FixedReg(PReg::new(constraint_field & 0b0111111, self.class()))
         } else if constraint_field & 0b0100000 != 0 {
@@ -1014,20 +1014,6 @@ impl Operand {
             OperandConstraint::FixedReg(preg) if self.vreg().vreg() == VReg::MAX => Some(preg),
             _ => None,
         }
-    }
-
-    /// Get the raw 32-bit encoding of this operand's fields.
-    #[inline(always)]
-    pub fn bits(self) -> u32 {
-        self.bits
-    }
-
-    /// Construct an `Operand` from the raw 32-bit encoding returned
-    /// from `bits()`.
-    #[inline(always)]
-    pub fn from_bits(bits: u32) -> Self {
-        debug_assert!(bits >> 29 <= 4);
-        Operand { bits }
     }
 }
 
